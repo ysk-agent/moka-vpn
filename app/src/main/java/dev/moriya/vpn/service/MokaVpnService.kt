@@ -43,16 +43,27 @@ class MokaVpnService : VpnService(), TunHost {
 
     private val backend get() = (application as MokaVpnApp).backend
 
+    private lateinit var networkTracker: DefaultNetworkTracker
+
     override fun onCreate() {
         super.onCreate()
         createNotificationChannel()
-        // TODO(network): register the ConnectivityManager default-network
-        // callback here and forward changes as
-        // backend.onNetworkChanged(ifname, gateway) plus
-        // setUnderlyingNetworks(...) on this service. Reduced form of
-        // upstream NetworkChangeCallback.kt — DESIGN.md §3.7. Required
-        // before the moto trial: without it Wi-Fi<->mobile switches
-        // strand the tunnel.
+        // Default-network tracking (reduced NetworkChangeCallback,
+        // DESIGN.md §3.7): the snapshot drives this service's
+        // underlying networks and is forwarded to the backend as
+        // interface/gateway + platform DNS config changes.
+        networkTracker = DefaultNetworkTracker(this) { snapshot ->
+            val networks = snapshot.network?.let { arrayOf(it) } ?: emptyArray()
+            try {
+                setUnderlyingNetworks(networks)
+            } catch (_: Exception) {
+                // Service not in a state to take networks yet; the
+                // next builder creation reads the tracker directly.
+            }
+            backend.onNetworkChanged(snapshot.interfaceName, snapshot.gateway)
+            backend.onPlatformDnsConfigChanged(snapshot.dnsConfig)
+        }
+        networkTracker.start()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int =
@@ -104,6 +115,7 @@ class MokaVpnService : VpnService(), TunHost {
     }
 
     override fun onDestroy() {
+        if (::networkTracker.isInitialized) networkTracker.stop()
         close()
         onVpnStatusChanged(false)
         super.onDestroy()
@@ -113,6 +125,24 @@ class MokaVpnService : VpnService(), TunHost {
 
     override fun protect(fd: Int): Boolean = super.protect(fd)
 
+    override fun bindSocketToNetwork(fd: Int): Boolean {
+        // Upstream App.bindSocketToNetwork: bind via the cached
+        // default network, wrapping the raw fd the same way.
+        val network = if (::networkTracker.isInitialized) {
+            networkTracker.current.network
+        } else {
+            null
+        } ?: return false
+        return try {
+            ParcelFileDescriptor.fromFd(fd).use { pfd ->
+                network.bindSocket(pfd.fileDescriptor)
+            }
+            true
+        } catch (_: Exception) {
+            false
+        }
+    }
+
     override fun newTunBuilder(): TunBuilder {
         val builder = Builder()
             .setConfigureIntent(configIntent())
@@ -121,8 +151,11 @@ class MokaVpnService : VpnService(), TunHost {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             builder.setMetered(false) // inherit underlying metered status
         }
-        // TODO(network): builder.setUnderlyingNetworks(arrayOf(default))
-        // once the network callback above is wired.
+        if (::networkTracker.isInitialized) {
+            val networks = networkTracker.current.network
+                ?.let { arrayOf(it) } ?: emptyArray()
+            builder.setUnderlyingNetworks(networks)
+        }
         // v0.1: no per-app allow/disallow lists (DESIGN.md §5).
         return AndroidTunBuilder(builder)
     }

@@ -10,3 +10,6 @@ vendor/tailscale-android/
 
 # CI artifacts downloaded for verification
 dist/
+
+# Manual build output
+build-manual/

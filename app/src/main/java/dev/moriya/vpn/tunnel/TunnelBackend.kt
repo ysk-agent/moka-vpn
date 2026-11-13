@@ -68,6 +68,13 @@ interface TunHost {
     /** Keep [fd] out of the tunnel (VpnService.protect). */
     fun protect(fd: Int): Boolean
 
+    /**
+     * Bind [fd] to the current default (underlying) network, for
+     * backends whose sockets must follow the physical network rather
+     * than the system default route. Default: unsupported.
+     */
+    fun bindSocketToNetwork(fd: Int): Boolean = false
+
     /** A fresh, single-use builder for one TUN establishment. */
     fun newTunBuilder(): TunBuilder
 
@@ -147,4 +154,12 @@ interface TunnelBackend {
 
     /** Default network changed; backends typically need ifname + gateway. */
     fun onNetworkChanged(interfaceName: String?, gatewayAddress: String?)
+
+    /**
+     * The platform DNS configuration string for the default network
+     * changed (format is backend-defined; libtailscale expects
+     * "dns1 dns2 …\nsearch-domains", upstream DnsConfig). Default:
+     * ignore.
+     */
+    fun onPlatformDnsConfigChanged(config: String) {}
 }

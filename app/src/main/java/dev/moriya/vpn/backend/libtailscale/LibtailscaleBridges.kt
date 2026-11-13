@@ -1,58 +1,72 @@
 package dev.moriya.vpn.backend.libtailscale
 
 import android.content.Context
-import java.net.NetworkInterface as JavaNetworkInterface
 import android.os.Build
 import android.provider.Settings
 import dev.moriya.vpn.tunnel.TunBuilder
 import dev.moriya.vpn.tunnel.TunHost
+import java.io.ByteArrayOutputStream
+import java.net.NetworkInterface as JavaNetworkInterface
+import java.security.KeyStore
+import java.security.cert.Certificate
 import java.util.Collections
 import java.util.Locale
 
 /**
  * Layer 3 bridges — the host side of the libtailscale contract
- * (DESIGN.md §3.2–§3.4). STUBS with the exact integration shape.
+ * (DESIGN.md §3.2–§3.4), wired for real against the AAR built from the
+ * pinned upstream ref. This package is the only place that implements
+ * libtailscale interfaces.
  *
- * When the AAR lands, exactly three declarations change:
- *   class LibtailscaleAppContext(...) : libtailscale.AppContext
- *   class LibtailscaleIPNService(host) : libtailscale.IPNService
- *   class LibtailscaleVPNServiceBuilder(b) : libtailscale.VPNServiceBuilder
- * and each override below gains its libtailscale signature (gomobile
- * generates Kotlin overrides with Long where Go has int in several
- * places — cf. upstream App.kt getSDKInt(): Long). No file outside
- * this package changes.
+ * Layout:
+ * - [LibtailscaleAppContextData] — Android-value source (device name,
+ *   interfaces JSON, CA certs, …) plus the encrypted-prefs trio.
+ * - [LibtailscaleAppContext] — the `libtailscale.AppContext`
+ *   implementation handed to `Libtailscale.start(...)`; it delegates
+ *   to the data source and to suppliers the backend owns (platform DNS
+ *   config string, socket binding via the current TunHost).
+ * - [LibtailscaleIPNService] / [LibtailscaleVPNServiceBuilder] — the
+ *   VpnService-side bridges over our Layer 1/2 [TunHost]/[TunBuilder].
+ *
+ * Honest degradations (DESIGN.md §3.2): the syspolicy trio always
+ * throws "not configured" (the Go side treats the error as such), and
+ * hardware attestation reports unsupported, matching
+ * `hwAttestationPref = false` at start time.
  */
 
 /** Android facilities the adapter needs, built at the composition root. */
 class LibtailscaleAppServices private constructor(
     val dataDir: String,
     val appContextData: LibtailscaleAppContextData,
+    val encryptedPrefs: EncryptedPrefStore,
 ) {
     companion object {
-        fun create(context: Context): LibtailscaleAppServices =
-            LibtailscaleAppServices(
+        fun create(context: Context): LibtailscaleAppServices {
+            val appContext = context.applicationContext
+            return LibtailscaleAppServices(
                 dataDir = context.filesDir.absolutePath,
-                appContextData = LibtailscaleAppContextData(context.applicationContext),
+                appContextData = LibtailscaleAppContextData(appContext),
+                encryptedPrefs = EncryptedPrefStore(appContext),
             )
+        }
     }
 }
 
+/** Thrown by the syspolicy getters: upstream's "not configured" signal. */
+class SyspolicyNotConfiguredException(key: String) :
+    Exception("syspolicy key not configured: $key")
+
 /**
  * Data source for Go's AppContext callbacks (interfaces.go).
- * The Android-value half is real already (it only uses framework APIs);
- * what is missing until AAR integration is the `: libtailscale.AppContext`
- * supertype.
  *
- * The encrypted-prefs trio (EncryptToPref / DecryptFromPref /
- * GetStateStoreKeysJSON) is implemented for real by
- * [EncryptedPrefStore]: Android Keystore AES-GCM, no Jetpack Security
- * (Moriya's decision, 2026-11-14; DESIGN.md §8). It is
- * production-shaped — the state store holds node key material, so
- * these methods can be wired to the real backend as they are when the
- * AAR integration happens. That wiring has NOT happened yet: the
- * adapter as a whole still reports BackendUnavailable.
+ * The encrypted-prefs trio is implemented by [EncryptedPrefStore]:
+ * Android Keystore AES-GCM, no Jetpack Security (Moriya's decision,
+ * 2026-11-14; DESIGN.md §8). The state store holds node key material,
+ * and these methods are wired to the real backend.
  */
 class LibtailscaleAppContextData(private val context: Context) {
+
+    private val encryptedPrefs = EncryptedPrefStore(context)
 
     fun log(tag: String, line: String) {
         android.util.Log.d(tag, line)
@@ -75,6 +89,38 @@ class LibtailscaleAppContextData(private val context: Context) {
 
     fun isChromeOS(): Boolean =
         context.packageManager.hasSystemFeature("android.hardware.type.pc")
+
+    fun installSource(): String {
+        // Reduced form of upstream AppSourceChecker: report the
+        // initiating installer package where the platform exposes it.
+        return try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                context.packageManager.getInstallSourceInfo(context.packageName)
+                    .initiatingPackageName ?: ""
+            } else {
+                @Suppress("DEPRECATION")
+                context.packageManager.getInstallerPackageName(context.packageName) ?: ""
+            }
+        } catch (_: Exception) {
+            ""
+        }
+    }
+
+    /** User CA certificates from AndroidCAStore, PEM-encoded (upstream App.kt). */
+    fun userCACertsPEM(): ByteArray {
+        val ks = KeyStore.getInstance("AndroidCAStore")
+        ks.load(null)
+        val out = ByteArrayOutputStream()
+        for (alias in ks.aliases()) {
+            if (!alias.startsWith("user:")) continue
+            val cert: Certificate = ks.getCertificate(alias) ?: continue
+            val b64 = android.util.Base64.encodeToString(cert.encoded, android.util.Base64.NO_WRAP)
+            out.write("-----BEGIN CERTIFICATE-----\n".toByteArray(Charsets.UTF_8))
+            b64.chunked(64).forEach { out.write((it + "\n").toByteArray(Charsets.UTF_8)) }
+            out.write("-----END CERTIFICATE-----\n".toByteArray(Charsets.UTF_8))
+        }
+        return out.toByteArray()
+    }
 
     /** JSON shape must match upstream App.kt InterfaceJson/AddrJson (§3.2). */
     fun interfacesAsJson(): String {
@@ -111,8 +157,6 @@ class LibtailscaleAppContextData(private val context: Context) {
 
     // Encrypted prefs trio — real implementation via EncryptedPrefStore
     // (Keystore AES-GCM), see the class doc above.
-    private val encryptedPrefs = EncryptedPrefStore(context)
-
     fun encryptToPref(key: String, value: String) {
         encryptedPrefs.encrypt(key, value)
     }
@@ -145,32 +189,107 @@ class LibtailscaleAppContextData(private val context: Context) {
 }
 
 /**
+ * The `libtailscale.AppContext` implementation (interfaces.go, 25
+ * methods in the generated binding). Constructed and owned by
+ * [LibtailscaleBackend]; [platformDnsConfig] and [bindSocket] are
+ * supplied by the backend so this object stays free of backend state.
+ */
+class LibtailscaleAppContext(
+    private val data: LibtailscaleAppContextData,
+    private val platformDnsConfig: () -> String,
+    private val bindSocket: (Int) -> Boolean,
+) : libtailscale.AppContext {
+
+    override fun log(tag: String, line: String) = data.log(tag, line)
+
+    override fun encryptToPref(key: String, value: String) = data.encryptToPref(key, value)
+
+    override fun decryptFromPref(key: String): String = data.decryptFromPref(key)
+
+    override fun getStateStoreKeysJSON(): String = data.stateStoreKeysJson()
+
+    override fun getOSVersion(): String = data.osVersion()
+
+    override fun getSDKInt(): Long = data.sdkInt().toLong()
+
+    override fun getDeviceName(): String = data.deviceName()
+
+    override fun getInstallSource(): String = data.installSource()
+
+    override fun shouldUseGoogleDNSFallback(): Boolean = false
+
+    override fun isChromeOS(): Boolean = data.isChromeOS()
+
+    override fun isClientLoggingEnabled(): Boolean = false
+
+    override fun getInterfacesAsJson(): String = data.interfacesAsJson()
+
+    override fun getPlatformDNSConfig(): String = platformDnsConfig()
+
+    override fun getSyspolicyStringValue(key: String): String =
+        throw SyspolicyNotConfiguredException(key)
+
+    override fun getSyspolicyBooleanValue(key: String): Boolean =
+        throw SyspolicyNotConfiguredException(key)
+
+    override fun getSyspolicyStringArrayJSONValue(key: String): String =
+        throw SyspolicyNotConfiguredException(key)
+
+    override fun hardwareAttestationKeySupported(): Boolean = false
+
+    override fun hardwareAttestationKeyCreate(): String =
+        throw UnsupportedOperationException("hardware attestation not supported")
+
+    override fun hardwareAttestationKeyRelease(id: String) =
+        throw UnsupportedOperationException("hardware attestation not supported")
+
+    override fun hardwareAttestationKeyPublic(id: String): ByteArray =
+        throw UnsupportedOperationException("hardware attestation not supported")
+
+    override fun hardwareAttestationKeySign(id: String, data: ByteArray): ByteArray =
+        throw UnsupportedOperationException("hardware attestation not supported")
+
+    override fun hardwareAttestationKeyLoad(id: String) =
+        throw UnsupportedOperationException("hardware attestation not supported")
+
+    override fun bindSocketToNetwork(fd: Int): Boolean = bindSocket(fd)
+
+    override fun getUserCACertsPEM(): ByteArray = data.userCACertsPEM()
+}
+
+/**
  * Bridge from our [TunHost] (Layer 1/2) to Go's IPNService
  * (interfaces.go §3.3). Holds no state of its own; protect/builder
  * calls forward to the host, lifecycle calls forward the other way.
  */
-class LibtailscaleIPNService(private val host: TunHost) {
-    fun id(): String = host.hostId
-    fun protect(fd: Int): Boolean = host.protect(fd)
-    fun newBuilder(): LibtailscaleVPNServiceBuilder =
+class LibtailscaleIPNService(private val host: TunHost) : libtailscale.IPNService {
+    override fun id(): String = host.hostId
+    override fun protect(fd: Int): Boolean = host.protect(fd)
+    override fun newBuilder(): libtailscale.VPNServiceBuilder =
         LibtailscaleVPNServiceBuilder(host.newTunBuilder())
-    fun close() = host.onVpnDisconnected()
-    fun disconnectVPN() = host.onVpnDisconnected()
-    fun updateVpnStatus(active: Boolean) = host.onVpnStatusChanged(active)
+    override fun close() = host.onVpnDisconnected()
+    override fun disconnectVPN() = host.onVpnDisconnected()
+    override fun updateVpnStatus(active: Boolean) = host.onVpnStatusChanged(active)
 }
 
 /**
  * Bridge from our [TunBuilder] to Go's VPNServiceBuilder
- * (interfaces.go §3.4). Note Establish()'s return: with the AAR this
- * wraps our TunSession into a libtailscale.ParcelFileDescriptor whose
- * Detach() is TunSession.detachFd().
+ * (interfaces.go §3.4). Establish() wraps our TunSession into a
+ * libtailscale.ParcelFileDescriptor whose detach() is
+ * TunSession.detachFd().
  */
-class LibtailscaleVPNServiceBuilder(private val builder: TunBuilder) {
-    fun setMTU(mtu: Int) = builder.setMtu(mtu)
-    fun addDNSServer(address: String) = builder.addDnsServer(address)
-    fun addSearchDomain(domain: String) = builder.addSearchDomain(domain)
-    fun addRoute(address: String, prefix: Int) = builder.addRoute(address, prefix)
-    fun excludeRoute(address: String, prefix: Int) = builder.excludeRoute(address, prefix)
-    fun addAddress(address: String, prefix: Int) = builder.addAddress(address, prefix)
-    fun establish() = builder.establish()
+class LibtailscaleVPNServiceBuilder(private val builder: TunBuilder) :
+    libtailscale.VPNServiceBuilder {
+    override fun setMTU(mtu: Int) = builder.setMtu(mtu)
+    override fun addDNSServer(address: String) = builder.addDnsServer(address)
+    override fun addSearchDomain(domain: String) = builder.addSearchDomain(domain)
+    override fun addRoute(address: String, prefix: Int) = builder.addRoute(address, prefix)
+    override fun excludeRoute(address: String, prefix: Int) = builder.excludeRoute(address, prefix)
+    override fun addAddress(address: String, prefix: Int) = builder.addAddress(address, prefix)
+    override fun establish(): libtailscale.ParcelFileDescriptor? {
+        val session = builder.establish() ?: return null
+        return object : libtailscale.ParcelFileDescriptor {
+            override fun detach(): Int = session.detachFd()
+        }
+    }
 }

@@ -3,10 +3,18 @@
 Status: local preparation (2026-11-14), followed the same day by the
 repo/CI phase Moriya approved: public GitHub repo `ysk-agent/moka-vpn`,
 pinned signing from the first CI build, and the Keystore-backed
-encrypted-prefs implementation (§8). Drive publication is not part of
-either step. Route A decided by Moriya on 2026-11-14: a standalone
-Android VPN app embedding libtailscale, first installed and evaluated
-on moto (moto g05, Android 15).
+encrypted-prefs implementation (§8). Later the same day Moriya
+redirected: CI optimisation is cancelled and a working VPN comes
+first — the Layer 3 backend is now wired for real (§3 contract
+implemented in the adapter package, including network-change/DNS
+callbacks in the service), and the current build route is the local
+manual pipeline (`build-manual.sh`: aapt2 → kotlinc → d8 → zipalign →
+apksigner with the pinned key, AAR taken from the per-ref release
+cache in `app/libs/`). The CI workflow remains as the fallback route.
+Drive publication is not part of any step so far. Route A decided by
+Moriya on 2026-11-14: a standalone Android VPN app embedding
+libtailscale, first installed and evaluated on moto (moto g05,
+Android 15).
 
 - Package: `dev.moriya.vpn`
 - App name: Moka VPN
