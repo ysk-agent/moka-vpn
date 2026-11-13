@@ -334,6 +334,20 @@ rule); all builds are GitHub Actions on the future public repo.
    → `app/libs/libtailscale.aar`. The `-androidapi 26` and the
    max-page-size flags are NDK-23/16 KB-page specific; changing the NDK
    invalidates them (see Risks).
+   **AAR reuse rule (added 2026-11-14, Moriya's suggestion).** We never
+   modify upstream code, so the AAR is a pure function of (pinned
+   upstream SHA, Go version, NDK version, build tags) and is built at
+   most once per such input set. The workflow first tries to download
+   a previously built AAR from this repo's GitHub Release
+   `libtailscale-<shortsha>` (asset `libtailscale.aar`, verified
+   against its companion `.sha256` asset); on a verified hit it skips
+   the NDK install and the whole AAR build. On a miss it builds as
+   above and publishes the result as that release. A fetch failure is
+   always a miss, never a build failure. The AAR is therefore rebuilt
+   only when the pinned upstream ref (or Go/NDK/build tags) changes.
+   (Upstream publishes no AAR asset itself — only the universal APK —
+   so the reuse source is our own earlier build, not a download of
+   theirs.)
 6. Decode pinned signing keystore from secrets; `./gradlew
    assembleDebug` (the "debug" build type carries the pinned signer in
    this project's template, as in apps-updater).

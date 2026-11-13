@@ -1,9 +1,10 @@
 name: build
 
-# DRAFT — written during local preparation (2026-11-14), not yet run.
-# Sequence per DESIGN.md §6: build libtailscale.aar in CI from
-# unmodified upstream source, then the Gradle app build with the
-# pinned signer, then the permanent emulator launch test.
+# Sequence per DESIGN.md §6: reuse a previously built libtailscale.aar
+# for the pinned upstream ref when one is published as a release asset
+# (building it in CI from unmodified upstream source only on a miss,
+# and publishing the result for later runs), then the Gradle app build
+# with the pinned signer, then the permanent emulator launch test.
 #
 # Gradle never runs on the Muse VM; this workflow is the only build
 # route. Signing secrets follow the apps-updater pattern and are
@@ -36,6 +37,11 @@ jobs:
   build:
     runs-on: ubuntu-latest
     timeout-minutes: 90
+    # Write access is used ONLY to publish the libtailscale AAR cache
+    # release (see the reuse steps below); every other job stays
+    # read-only via the top-level permissions.
+    permissions:
+      contents: write
     steps:
       - name: Checkout moka-vpn
         uses: actions/checkout@v4
@@ -71,14 +77,55 @@ jobs:
 
       - uses: gradle/actions/setup-gradle@v4
 
-      - name: Install Android SDK platform/build-tools and NDK
+      - name: Try to fetch a cached libtailscale.aar for the pinned ref
+        id: aar-cache
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # AAR reuse (DESIGN.md §6): upstream code is never modified,
+          # so the AAR is a pure function of (pinned upstream SHA, Go
+          # version, NDK version, build tags). Previously built AARs
+          # are published as GitHub Release assets under the tag
+          # libtailscale-<shortsha> with a companion .sha256 asset.
+          # Any failure here is a cache MISS, never a build failure:
+          # the steps below then build from source as before.
+          echo "hit=false" >> "$GITHUB_OUTPUT"
+          TAG="libtailscale-$(echo '${{ env.TAILSCALE_ANDROID_REF }}' | cut -c1-12)"
+          echo "Looking for cached AAR under release tag $TAG"
+          mkdir -p "$RUNNER_TEMP/aar-cache"
+          if gh release download "$TAG" -R "$GITHUB_REPOSITORY" \
+               -p "libtailscale.aar" -p "libtailscale.aar.sha256" \
+               -D "$RUNNER_TEMP/aar-cache" 2>/dev/null; then
+            cd "$RUNNER_TEMP/aar-cache"
+            if sha256sum -c libtailscale.aar.sha256; then
+              mkdir -p "$GITHUB_WORKSPACE/app/libs"
+              cp libtailscale.aar "$GITHUB_WORKSPACE/app/libs/libtailscale.aar"
+              echo "hit=true" >> "$GITHUB_OUTPUT"
+              echo "AAR cache HIT ($TAG); skipping NDK install and AAR build."
+            else
+              echo "Cached AAR failed SHA-256 verification; treating as a miss."
+            fi
+          else
+            echo "No cached AAR for $TAG; will build from source."
+          fi
+          exit 0
+
+      - name: Install Android SDK platform/build-tools
         run: |
           SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
           yes | "$SDKMANAGER" --licenses > /dev/null || true
-          "$SDKMANAGER" "platforms;android-35" "build-tools;35.0.0" "ndk;${{ env.NDK_VERSION }}"
+          "$SDKMANAGER" "platforms;android-35" "build-tools;35.0.0"
+
+      - name: Install Android NDK (AAR build only)
+        if: steps.aar-cache.outputs.hit != 'true'
+        run: |
+          SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          yes | "$SDKMANAGER" --licenses > /dev/null || true
+          "$SDKMANAGER" "ndk;${{ env.NDK_VERSION }}"
           echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/${{ env.NDK_VERSION }}" >> "$GITHUB_ENV"
 
       - name: Build libtailscale.aar (upstream Makefile)
+        if: steps.aar-cache.outputs.hit != 'true'
         working-directory: vendor/tailscale-android
         run: |
           # The Makefile target installs gomobile/gobind via its own
@@ -96,9 +143,45 @@ jobs:
           ls -l android/libs/libtailscale.aar
 
       - name: Stage AAR into the app
+        if: steps.aar-cache.outputs.hit != 'true'
         run: |
           mkdir -p app/libs
           cp vendor/tailscale-android/android/libs/libtailscale.aar app/libs/libtailscale.aar
+
+      - name: Publish the built AAR as the cache release for this ref
+        if: steps.aar-cache.outputs.hit != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Best effort: publishing the cache must not fail the build.
+          TAG="libtailscale-$(echo '${{ env.TAILSCALE_ANDROID_REF }}' | cut -c1-12)"
+          cd vendor/tailscale-android/android/libs
+          sha256sum libtailscale.aar > libtailscale.aar.sha256
+          cat > "$RUNNER_TEMP/aar-release-notes.md" <<EOF
+          Cached libtailscale.aar for moka-vpn CI (DESIGN.md §6 reuse rule).
+
+          Built from unmodified upstream source:
+          - tailscale-android ref: ${{ env.TAILSCALE_ANDROID_REF }}
+          - Go: ${{ env.GO_VERSION }}
+          - NDK: ${{ env.NDK_VERSION }}
+          - Build: upstream Makefile \`make libtailscale\` (gomobile bind -target android -androidapi 26, tags: ./build-tags.sh + ts_omit_cachenetmap)
+
+          Rebuild only when the pinned ref, Go, NDK, or build tags change.
+          EOF
+          if gh release view "$TAG" -R "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            gh release upload "$TAG" -R "$GITHUB_REPOSITORY" --clobber \
+              libtailscale.aar libtailscale.aar.sha256 \
+              && echo "AAR cache release $TAG updated." \
+              || echo "WARNING: AAR cache upload failed; continuing."
+          else
+            gh release create "$TAG" -R "$GITHUB_REPOSITORY" \
+              --title "libtailscale AAR cache (${{ env.TAILSCALE_ANDROID_REF }})" \
+              --notes-file "$RUNNER_TEMP/aar-release-notes.md" \
+              libtailscale.aar libtailscale.aar.sha256 \
+              && echo "AAR cache release $TAG created." \
+              || echo "WARNING: AAR cache release creation failed; continuing."
+          fi
+          exit 0
 
       - name: Decode signing keystore
         env:
