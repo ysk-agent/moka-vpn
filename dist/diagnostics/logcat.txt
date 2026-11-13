@@ -1,0 +1,105 @@
+--------- beginning of system
+11-13 23:20:46.734   541   614 W ActivityTaskManager: callingPackage for (uid=0, pid=2337) has no WPC
+11-13 23:20:46.734   541   614 W OptProp : Cannot read opt property android.window.PROPERTY_COMPAT_ALLOW_ORIENTATION_OVERRIDE
+--------- beginning of main
+11-13 23:20:46.735   541   614 V GrammaticalInflectionUtils: AttributionSource: AttributionSource { uid = 10148, packageName = null, attributionTag = null, token = android.os.Binder@9f41c5f, deviceId = 0, next = null } does not have READ_SYSTEM_GRAMMATICAL_GENDER permission.
+11-13 23:20:46.735   541   614 W OptProp : Cannot read opt property android.window.PROPERTY_COMPAT_ALLOW_RESIZEABLE_ACTIVITY_OVERRIDES
+11-13 23:20:46.735   541   614 W OptProp : Cannot read opt property android.window.PROPERTY_COMPAT_ALLOW_MIN_ASPECT_RATIO_OVERRIDE
+11-13 23:20:46.737   866  1565 D KeyguardService: setOccluded(false)
+11-13 23:20:46.737   866  1565 D KeyguardViewMediator: setOccluded(false)
+11-13 23:20:46.737   866   866 D KeyguardViewMediator: handleSetOccluded(false)
+11-13 23:20:46.737   541   614 I ActivityTaskManager: START u0 {flg=0x10000000 cmp=dev.moriya.vpn/.MainActivity} with LAUNCH_SINGLE_TOP from uid 0 (BAL_ALLOW_ALLOWLISTED_UID) result code=3
+11-13 23:20:46.737   866   866 D KeyguardViewMediator: KeyguardViewMediator queue processing message: SET_OCCLUDED
+11-13 23:20:46.740   541   567 D OomAdjuster: Not killing cached processes
+11-13 23:20:46.741   866   917 D WindowManagerShell: onActivityRestartAttempt: ComponentInfo{dev.moriya.vpn/dev.moriya.vpn.MainActivity}
+11-13 23:20:47.559   541   778 D WifiConfigStore: Writing to stores completed in 2 ms.
+11-13 23:20:47.571   346   390 I netd    : tetherGetStats() -> {[]} <0.44ms>
+11-13 23:20:47.572   346   390 I netd    : bandwidthSetGlobalAlert(2097152) <0.11ms>
+11-13 23:20:48.605   170   897 I keystore2: system/security/keystore2/watchdog/src/lib.rs:319 - Watchdog thread idle -> terminating. Have a great day.
+11-13 23:20:49.308   541   843 I SdkSandboxManager: Reconciling sdk data package directories for 0
+11-13 23:20:51.030   541   614 D WifiNl80211Manager: Scan result ready event
+11-13 23:20:51.030   541   614 D WifiNative: Scan result ready event
+11-13 23:20:51.032   541   778 I HalDevMgr: bestIfaceCreationProposal is null, requestIface=STA, existingIface=[name=wlan0 type=STA]
+11-13 23:20:51.349   541   638 D ActivityManager: freezing 1702 com.android.quicksearchbox
+11-13 23:20:51.350   541   785 D InetDiagMessage: Destroyed 0 sockets, proto=IPPROTO_TCP, family=AF_INET, states=14
+11-13 23:20:51.351   541   785 D InetDiagMessage: Destroyed 0 sockets, proto=IPPROTO_TCP, family=AF_INET6, states=14
+11-13 23:20:51.351   541   785 D InetDiagMessage: Destroyed live tcp sockets for uids={10103} in 1ms
+11-13 23:20:51.391   541   614 W OverlayManager: service 'idmap' died
+--------- beginning of kernel
+11-13 23:20:51.565     0     0 I init    : Sending signal 9 to service 'idmap2d' (pid 1629) process group...
+11-13 23:20:51.567     0     0 I libprocessgroup: Removed cgroup /sys/fs/cgroup/uid_1000/pid_1629
+11-13 23:20:51.568     0     0 I init    : Control message: Processed ctl.stop for 'idmap2d' from pid: 541 (system_server)
+11-13 23:20:51.570     0     0 I init    : Service 'idmap2d' (pid 1629) received signal 9
+11-13 23:20:51.571     0     0 I init    : Sending signal 9 to service 'idmap2d' (pid 1629) process group...
+11-13 23:20:51.572     0     0 E libprocessgroup: Failed to write 1 to /sys/fs/cgroup/uid_1000/pid_1629/cgroup.kill: No such file or directory
+11-13 23:20:51.574     0     0 E libprocessgroup: Failed to open /sys/fs/cgroup/uid_1000/pid_1629/cgroup.procs: No such file or directory
+11-13 23:20:51.474   879   885 W ssioncontroller: ApkAssets: Deleting an ApkAssets object '<empty> and /system/framework/framework-res.apk' with 1 weak references
+11-13 23:20:51.482   346   390 I netd    : tetherGetStats() -> {[]} <0.32ms>
+11-13 23:20:51.530  1676  1687 W putmethod.latin: Cleared Reference was only reachable from finalizer (only reported once)
+11-13 23:20:51.855  2347  2347 W BpBinder: Linking to death on android.gui.ISurfaceComposer but there are no threads (yet?) listening to incoming transactions. See ProcessState::startThreadPool and ProcessState::setThreadPoolMaxThreadCount. Generally you should setup the binder threadpool before other initialization steps.
+11-13 23:20:51.856  2347  2347 W ProcessState: Extra binder thread started, but 0 threads requested. Do not use *startThreadPool when zero threads are requested.
+11-13 23:20:51.870   146   146 I hwservicemanager: getTransport: Cannot find entry android.hardware.graphics.mapper@4.0::IMapper/default in either framework or device VINTF manifest.
+11-13 23:20:51.870  2347  2348 I Gralloc4: mapper 4.x is not supported
+11-13 23:20:52.041     0     0 I servicemanager: Caller(pid=2347,uid=0,sid=u:r:su:s0) Could not find android.hardware.graphics.allocator.IAllocator/default in the VINTF manifest. No alternative instances declared in VINTF.
+11-13 23:20:52.064   541  1072 W ActivityTaskManager: callingPackage for (uid=0, pid=2352) has no WPC
+11-13 23:20:52.065   541  1072 W OptProp : Cannot read opt property android.window.PROPERTY_COMPAT_ALLOW_ORIENTATION_OVERRIDE
+11-13 23:20:52.065   541  1072 V GrammaticalInflectionUtils: AttributionSource: AttributionSource { uid = 10148, packageName = null, attributionTag = null, token = android.os.Binder@9f41c5f, deviceId = 0, next = null } does not have READ_SYSTEM_GRAMMATICAL_GENDER permission.
+11-13 23:20:52.066   541  1072 W OptProp : Cannot read opt property android.window.PROPERTY_COMPAT_ALLOW_RESIZEABLE_ACTIVITY_OVERRIDES
+11-13 23:20:52.066   541  1072 W OptProp : Cannot read opt property android.window.PROPERTY_COMPAT_ALLOW_MIN_ASPECT_RATIO_OVERRIDE
+11-13 23:20:52.069   866  1565 D KeyguardService: setOccluded(false)
+11-13 23:20:52.069   541  1072 I ActivityTaskManager: START u0 {flg=0x10000000 cmp=dev.moriya.vpn/.MainActivity} with LAUNCH_SINGLE_TOP from uid 0 (BAL_ALLOW_ALLOWLISTED_UID) result code=3
+11-13 23:20:52.069   866  1565 D KeyguardViewMediator: setOccluded(false)
+11-13 23:20:52.070   866   866 D KeyguardViewMediator: handleSetOccluded(false)
+11-13 23:20:52.070   866   866 D KeyguardViewMediator: KeyguardViewMediator queue processing message: SET_OCCLUDED
+11-13 23:20:52.072   866   917 D WindowManagerShell: onActivityRestartAttempt: ComponentInfo{dev.moriya.vpn/dev.moriya.vpn.MainActivity}
+11-13 23:20:52.072   541   567 D OomAdjuster: Not killing cached processes
+11-13 23:20:54.229  1254  1260 W d.process.acore: ApkAssets: Deleting an ApkAssets object '<empty> and /product/priv-app/Contacts/Contacts.apk' with 1 weak references
+11-13 23:20:54.243   541   785 D InetDiagMessage: Destroyed 0 sockets, proto=IPPROTO_TCP, family=AF_INET, states=14
+11-13 23:20:54.243   541   785 D InetDiagMessage: Destroyed 0 sockets, proto=IPPROTO_TCP, family=AF_INET6, states=14
+11-13 23:20:54.243   541   785 D InetDiagMessage: Destroyed live tcp sockets for uids={10102} in 1ms
+11-13 23:20:54.243   541   785 D InetDiagMessage: Destroyed 0 sockets, proto=IPPROTO_TCP, family=AF_INET, states=14
+11-13 23:20:54.244   541   785 D InetDiagMessage: Destroyed 0 sockets, proto=IPPROTO_TCP, family=AF_INET6, states=14
+11-13 23:20:54.244   541   785 D InetDiagMessage: Destroyed live tcp sockets for uids={20102} in 1ms
+11-13 23:20:54.871   541   785 D InetDiagMessage: Destroyed 0 sockets, proto=IPPROTO_TCP, family=AF_INET, states=14
+11-13 23:20:54.872   541   785 D InetDiagMessage: Destroyed 0 sockets, proto=IPPROTO_TCP, family=AF_INET6, states=14
+11-13 23:20:54.872   541   785 D InetDiagMessage: Destroyed live tcp sockets for uids={10067} in 1ms
+11-13 23:20:54.872   541   785 D InetDiagMessage: Destroyed 0 sockets, proto=IPPROTO_TCP, family=AF_INET, states=14
+11-13 23:20:54.873   541   785 D InetDiagMessage: Destroyed 0 sockets, proto=IPPROTO_TCP, family=AF_INET6, states=14
+11-13 23:20:54.873   541   785 D InetDiagMessage: Destroyed live tcp sockets for uids={20067} in 1ms
+11-13 23:20:55.068   541   785 D InetDiagMessage: Destroyed 0 sockets, proto=IPPROTO_TCP, family=AF_INET, states=14
+11-13 23:20:55.068   541   785 D InetDiagMessage: Destroyed 0 sockets, proto=IPPROTO_TCP, family=AF_INET6, states=14
+11-13 23:20:55.068   541   785 D InetDiagMessage: Destroyed live tcp sockets for uids={10108} in 1ms
+11-13 23:20:55.068   541   785 D InetDiagMessage: Destroyed 0 sockets, proto=IPPROTO_TCP, family=AF_INET, states=14
+11-13 23:20:55.069   541   785 D InetDiagMessage: Destroyed 0 sockets, proto=IPPROTO_TCP, family=AF_INET6, states=14
+11-13 23:20:55.069   541   785 D InetDiagMessage: Destroyed live tcp sockets for uids={20108} in 1ms
+11-13 23:20:55.129   541   785 D InetDiagMessage: Destroyed 0 sockets, proto=IPPROTO_TCP, family=AF_INET, states=14
+11-13 23:20:55.129   541   785 D InetDiagMessage: Destroyed 1 sockets, proto=IPPROTO_TCP, family=AF_INET6, states=14
+11-13 23:20:55.129   541   785 D InetDiagMessage: Destroyed live tcp sockets for uids={10076} in 1ms
+11-13 23:20:55.129   541   785 D InetDiagMessage: Destroyed 0 sockets, proto=IPPROTO_TCP, family=AF_INET, states=14
+11-13 23:20:55.130   541   785 D InetDiagMessage: Destroyed 0 sockets, proto=IPPROTO_TCP, family=AF_INET6, states=14
+11-13 23:20:55.130   541   785 D InetDiagMessage: Destroyed live tcp sockets for uids={20076} in 1ms
+11-13 23:20:56.090   541   785 D InetDiagMessage: Destroyed 0 sockets, proto=IPPROTO_TCP, family=AF_INET, states=14
+11-13 23:20:56.090   541   785 D InetDiagMessage: Destroyed 0 sockets, proto=IPPROTO_TCP, family=AF_INET6, states=14
+11-13 23:20:56.090   541   785 D InetDiagMessage: Destroyed live tcp sockets for uids={10107} in 1ms
+11-13 23:20:56.090   541   785 D InetDiagMessage: Destroyed 0 sockets, proto=IPPROTO_TCP, family=AF_INET, states=14
+11-13 23:20:56.091   541   785 D InetDiagMessage: Destroyed 0 sockets, proto=IPPROTO_TCP, family=AF_INET6, states=14
+11-13 23:20:56.091   541   785 D InetDiagMessage: Destroyed live tcp sockets for uids={20107} in 1ms
+11-13 23:20:56.688   541   556 I BpBinder: onLastStrongRef automatically unlinking death recipients: 
+11-13 23:20:56.688   541   556 I BpBinder: onLastStrongRef automatically unlinking death recipients: 
+11-13 23:20:56.690   541   557 W system_server: ApkAssets: Deleting an ApkAssets object '<empty> and /system/priv-app/InputDevices/InputDevices.apk' with 1 weak references
+11-13 23:20:56.690   541   557 W system_server: ApkAssets: Deleting an ApkAssets object '<empty> and /product/app/LatinIME/LatinIME.apk' with 1 weak references
+11-13 23:20:56.690   541   557 W system_server: ApkAssets: Deleting an ApkAssets object '<empty> and /system_ext/app/AccessibilityMenu/AccessibilityMenu.apk' with 1 weak references
+11-13 23:20:56.691   541   557 W system_server: ApkAssets: Deleting an ApkAssets object '<empty> and /product/app/Calendar/Calendar.apk' with 1 weak references
+11-13 23:20:56.691   541   557 W system_server: ApkAssets: Deleting an ApkAssets object '<empty> and /product/app/DeskClock/DeskClock.apk' with 1 weak references
+11-13 23:20:56.691   541   557 W system_server: ApkAssets: Deleting an ApkAssets object '<empty> and /product/app/Gallery2/Gallery2.apk' with 1 weak references
+11-13 23:20:56.691   541   557 W system_server: ApkAssets: Deleting an ApkAssets object '<empty> and /product/app/messaging/messaging.apk' with 1 weak references
+11-13 23:20:56.691   541   557 W system_server: ApkAssets: Deleting an ApkAssets object '<empty> and /system_ext/priv-app/Settings/Settings.apk' with 1 weak references
+11-13 23:20:56.691   541   566 I DropBoxManagerService: add tag=system_server_strictmode isTagEnabled=true flags=0x2
+11-13 23:20:56.692   541   557 W system_server: ApkAssets: Deleting an ApkAssets object '<empty> and /system_ext/priv-app/SystemUI/SystemUI.apk' with 1 weak references
+11-13 23:20:56.692   541   557 W system_server: ApkAssets: Deleting an ApkAssets object '/vendor/overlay/SystemUI__sdk_phone64_x86_64__auto_generated_rro_vendor.apk' with 1 weak references
+11-13 23:20:56.692   541   557 W system_server: ApkAssets: Deleting an ApkAssets object '/product/overlay/SystemUIEmulationPixel6/SystemUIEmulationPixel6Overlay.apk' with 1 weak references
+11-13 23:20:57.183  2364  2364 W BpBinder: Linking to death on android.gui.ISurfaceComposer but there are no threads (yet?) listening to incoming transactions. See ProcessState::startThreadPool and ProcessState::setThreadPoolMaxThreadCount. Generally you should setup the binder threadpool before other initialization steps.
+11-13 23:20:57.183  2364  2364 W ProcessState: Extra binder thread started, but 0 threads requested. Do not use *startThreadPool when zero threads are requested.
+11-13 23:20:57.195   146   146 I hwservicemanager: getTransport: Cannot find entry android.hardware.graphics.mapper@4.0::IMapper/default in either framework or device VINTF manifest.
+11-13 23:20:57.195  2364  2365 I Gralloc4: mapper 4.x is not supported
+11-13 23:20:57.366     0     0 I servicemanager: Caller(pid=2364,uid=0,sid=u:r:su:s0) Could not find android.hardware.graphics.allocator.IAllocator/default in the VINTF manifest. No alternative instances declared in VINTF.

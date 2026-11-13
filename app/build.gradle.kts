@@ -18,6 +18,15 @@ android {
         targetSdk = 34
         versionCode = 1
         versionName = "0.1.0"
+
+        // The gomobile AAR carries libgojni.so for four ABIs (~135 MB
+        // total; the first CI APK was 138 MB). All target devices
+        // (moto g05, Libero, the other node phones) are arm64, so only
+        // arm64-v8a (28 MB) is packaged. The x86_64 emulator job builds
+        // without the AAR and is unaffected.
+        ndk {
+            abiFilters += "arm64-v8a"
+        }
     }
 
     // Pinned signing key, same pattern as apps-updater / yt-player /
