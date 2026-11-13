@@ -62,14 +62,18 @@ android {
 dependencies {
     // libtailscale, built in CI from unmodified upstream source and
     // dropped at app/libs/libtailscale.aar (see .github/workflows/
-    // build.yml and DESIGN.md §6). files() (not a flatDir repository)
-    // on purpose: when the AAR is absent — every build until the AAR
-    // step is wired, and the x86_64 emulator launch test — the
-    // dependency is simply empty and the app compiles and runs against
-    // the Layer 3 stub, which reports BackendUnavailable. Only the
+    // build.yml and DESIGN.md §6). Declared only when the file exists:
+    // a files() dependency on a missing AAR fails checkDebugAarMetadata
+    // (ExtractAarTransform: No such file or directory — seen in the
+    // emulator-launch job of CI run 43524815712, which intentionally
+    // builds without the AAR). When absent — the x86_64 emulator launch
+    // test — the app compiles and runs against the Layer 3 stub, which
+    // reports BackendUnavailable. Only the
     // dev.moriya.vpn.backend.libtailscale package may ever reference
     // types from this AAR.
-    implementation(files("libs/libtailscale.aar"))
+    if (file("libs/libtailscale.aar").exists()) {
+        implementation(files("libs/libtailscale.aar"))
+    }
 
     // No other dependencies in v0.1: framework APIs only, mirroring
     // apps-updater. The adapter's AppContext encrypted storage is also
