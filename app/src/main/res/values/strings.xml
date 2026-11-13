@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Moka VPN</string>
+    <string name="vpn_channel_name">VPN status</string>
+    <string name="vpn_channel_description">Ongoing notification while the VPN service is running</string>
+</resources>

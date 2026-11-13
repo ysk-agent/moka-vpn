@@ -1,0 +1,9 @@
+.gradle/
+build/
+app/build/
+app/libs/libtailscale.aar
+app/libs/libtailscale_unstripped.aar
+local.properties
+*.apk
+signing/
+vendor/tailscale-android/

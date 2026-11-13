@@ -1,0 +1,205 @@
+name: build
+
+# DRAFT — written during local preparation (2026-11-14), not yet run.
+# Sequence per DESIGN.md §6: build libtailscale.aar in CI from
+# unmodified upstream source, then the Gradle app build with the
+# pinned signer, then the permanent emulator launch test.
+#
+# Gradle never runs on the Muse VM; this workflow is the only build
+# route. Signing secrets follow the apps-updater pattern and are
+# registered when the repo is created (not part of local prep):
+#   SIGNING_KEYSTORE_B64, SIGNING_STORE_PASS, SIGNING_KEY_PASS,
+#   SIGNING_KEY_ALIAS
+# Register them with `printf %s "$VALUE" | gh secret set NAME` —
+# an `echo |` pipe stores a trailing newline and breaks signing.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  # Pinned upstream ref for the AAR. Bump deliberately, re-checking
+  # DESIGN.md §8 (API levels, NDK pin, gomobile coupling) each time.
+  # This is the exact commit SHA of the tailscale-android checkout the
+  # design was written against (local clone HEAD, 2026-11-03).
+  TAILSCALE_ANDROID_REF: "03854f7300944cfd4a0c1dc99f6200456d5871d4"
+  GO_VERSION: "1.27.3" # matches upstream go.mod (libtailscale)
+  NDK_VERSION: "23.1.7779620" # pinned by upstream Makefile
+  # From upstream go.mod: golang.org/x/mobile v0.0.0-20240806205939-81131f6468ab
+  GOMOBILE_VERSION: "v0.0.0-20240806205939-81131f6468ab"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Checkout moka-vpn
+        uses: actions/checkout@v4
+
+      - name: Layering check (libtailscale stays in Layer 3)
+        run: |
+          # DESIGN.md §2: no file outside the adapter package may
+          # reference libtailscale. Cheap and catches architecture
+          # drift before it costs an AAR build.
+          # Imports only: prose mentions of libtailscale in comments
+          # outside Layer 3 are fine; type references are not.
+          if grep -rn "^import libtailscale" app/src/main/java --include='*.kt' \
+               | grep -v 'backend/libtailscale'; then
+            echo "ERROR: libtailscale imported outside Layer 3" >&2
+            exit 1
+          fi
+
+      - name: Checkout tailscale-android (AAR source)
+        uses: actions/checkout@v4
+        with:
+          repository: tailscale/tailscale-android
+          ref: ${{ env.TAILSCALE_ANDROID_REF }}
+          path: vendor/tailscale-android
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Install Android SDK platform/build-tools and NDK
+        run: |
+          SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          yes | "$SDKMANAGER" --licenses > /dev/null || true
+          "$SDKMANAGER" "platforms;android-35" "build-tools;35.0.0" "ndk;${{ env.NDK_VERSION }}"
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/${{ env.NDK_VERSION }}" >> "$GITHUB_ENV"
+
+      - name: Build libtailscale.aar (upstream Makefile)
+        working-directory: vendor/tailscale-android
+        run: |
+          # The Makefile target installs gomobile/gobind via its own
+          # tool/go wrapper, runs:
+          #   gomobile bind -target android -androidapi 26 \
+          #     -tags "$(./build-tags.sh) ts_omit_cachenetmap" \
+          #     -ldflags "-linkmode=external -extldflags=-Wl,-z,max-page-size=16384 ..."
+          # then strips libgojni.so and repackages the AAR.
+          # The -androidapi 26 and max-page-size flags are NDK-23
+          # specific (DESIGN.md §8) — do not change one without the
+          # other. If stock Go 1.27.3 + the go.mod x/mobile version
+          # proves incompatible, this step is where upstream tool/go
+          # takes over entirely (already its default).
+          make libtailscale
+          ls -l android/libs/libtailscale.aar
+
+      - name: Stage AAR into the app
+        run: |
+          mkdir -p app/libs
+          cp vendor/tailscale-android/android/libs/libtailscale.aar app/libs/libtailscale.aar
+
+      - name: Decode signing keystore
+        env:
+          SIGNING_KEYSTORE_B64: ${{ secrets.SIGNING_KEYSTORE_B64 }}
+        run: |
+          if [ -n "$SIGNING_KEYSTORE_B64" ]; then
+            echo "$SIGNING_KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/signing.keystore"
+            echo "SIGNING_KEYSTORE=$RUNNER_TEMP/signing.keystore" >> "$GITHUB_ENV"
+          fi
+
+      - name: Build debug APK (pinned signer when secrets present)
+        env:
+          SIGNING_STORE_PASS: ${{ secrets.SIGNING_STORE_PASS }}
+          SIGNING_KEY_PASS: ${{ secrets.SIGNING_KEY_PASS }}
+          SIGNING_KEY_ALIAS: ${{ secrets.SIGNING_KEY_ALIAS }}
+        run: ./gradlew assembleDebug --stacktrace
+
+      - name: Name, hash and fingerprint the APK
+        run: |
+          cp app/build/outputs/apk/debug/app-debug.apk mokavpn.apk
+          sha256sum mokavpn.apk
+          APKSIGNER="$(ls "$ANDROID_HOME"/build-tools/*/apksigner | sort -V | tail -1)"
+          "$APKSIGNER" verify --print-certs mokavpn.apk | grep -i "SHA-256" || true
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: mokavpn-apk
+          path: mokavpn.apk
+          if-no-files-found: error
+
+  emulator-launch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Install Android SDK platform 35
+        run: |
+          SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          yes | "$SDKMANAGER" --licenses > /dev/null || true
+          "$SDKMANAGER" "platforms;android-35" "build-tools;35.0.0"
+
+      # No AAR step in this job, deliberately: the emulator is x86_64
+      # and cannot load the arm64 libgojni.so. The launch test covers
+      # Layers 1-2 plus the Layer 3 stub's BackendUnavailable path
+      # (DESIGN.md §6). It must never be read as backend verification.
+
+      - name: Decode signing keystore
+        env:
+          SIGNING_KEYSTORE_B64: ${{ secrets.SIGNING_KEYSTORE_B64 }}
+        run: |
+          if [ -n "$SIGNING_KEYSTORE_B64" ]; then
+            echo "$SIGNING_KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/signing.keystore"
+            echo "SIGNING_KEYSTORE=$RUNNER_TEMP/signing.keystore" >> "$GITHUB_ENV"
+          fi
+
+      - name: Build debug APK
+        env:
+          SIGNING_STORE_PASS: ${{ secrets.SIGNING_STORE_PASS }}
+          SIGNING_KEY_PASS: ${{ secrets.SIGNING_KEY_PASS }}
+          SIGNING_KEY_ALIAS: ${{ secrets.SIGNING_KEY_ALIAS }}
+        run: ./gradlew assembleDebug --stacktrace
+
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Launch app on emulator
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          target: default
+          arch: x86_64
+          profile: pixel_6
+          disable-animations: true
+          emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          # Single-line script on purpose: the runner executes multi-line
+          # inline scripts line-by-line in separate shells, which breaks
+          # variables and exit codes. The real test lives in ci/.
+          script: bash ci/emulator-launch-test.sh
+
+      - name: Upload launch diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: launch-diagnostics
+          path: |
+            logcat.txt
+            dumpsys-activities.txt
+            window_dump.xml
+            screenshot-main.png
+            screenshot-main-light.png
+            screenshot-relaunch.png
+          if-no-files-found: warn
