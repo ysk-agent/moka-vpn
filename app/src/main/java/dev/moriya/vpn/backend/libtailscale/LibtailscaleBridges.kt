@@ -1,7 +1,7 @@
 package dev.moriya.vpn.backend.libtailscale
 
 import android.content.Context
-import android.net.NetworkInterface as JavaNetworkInterface
+import java.net.NetworkInterface as JavaNetworkInterface
 import android.os.Build
 import android.provider.Settings
 import dev.moriya.vpn.tunnel.TunBuilder
