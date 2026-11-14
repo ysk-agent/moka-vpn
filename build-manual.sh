@@ -58,7 +58,7 @@ echo "=== aapt2 compile + link ==="
   -I "$ANDROID_JAR" \
   --manifest app/src/main/AndroidManifest.xml \
   --min-sdk-version 29 --target-sdk-version 34 \
-  --version-code 1 --version-name 0.1.0 \
+  --version-code 2 --version-name 0.1.1 \
   --java "$OUT/gen" \
   "$OUT/res.zip"
 

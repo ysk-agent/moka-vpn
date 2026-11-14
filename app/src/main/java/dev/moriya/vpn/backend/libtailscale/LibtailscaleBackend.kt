@@ -31,13 +31,31 @@ import org.json.JSONObject
  *   parsed with Layer-3-local minimal org.json code (DESIGN.md §8:
  *   do NOT copy upstream's ui/model package) and mapped onto
  *   [TunnelStatus].
- * - LocalAPI control flow (upstream ui/localapi/Client.kt shapes):
- *   POST `start` with {"AuthKey": …, "UpdatePrefs": {…}} for
- *   enrolment, PATCH `prefs` with MaskedPrefs WantRunning for
- *   connect/disconnect, POST `logout` + `reset-auth` for
- *   resetEnrolment, GET `status` on demand via [currentStatus]
- *   refreshes from Notify state only (status endpoint is used after
- *   start to seed addresses if no Notify has arrived yet).
+ * - LocalAPI enrolment follows upstream's canonical login chain
+ *   (ui/viewModel/IpnViewModel.kt `login()`, in order):
+ *   1. PATCH `prefs` with a MaskedPrefs that clears LoggedOut when an
+ *      auth key is used and applies HostName/ControlURL overrides.
+ *      Go's `startLocked` refuses to log in at all while
+ *      prefs.LoggedOut is true, so this step is not optional.
+ *   2. POST `start` with {"AuthKey": …, "UpdatePrefs": <the full
+ *      Prefs object returned by step 1, with WantRunning set true>}.
+ *      ipn.Options.UpdatePrefs is a complete *ipn.Prefs replacement,
+ *      never a sparse overlay.
+ *   3. POST `login-interactive`. Upstream documents this as
+ *      "currently required for both interactive and non-interactive
+ *      (using auth key) login": it is the only unconditional trigger
+ *      of controlclient.Login on the control client that step 2
+ *      created. (v0.1.0 skipped steps 1 and 3 and sent a sparse
+ *      UpdatePrefs; the backend then sat in NeedsLogin with no error
+ *      anywhere — Go only forwards vizerrors as Notify.ErrMessage,
+ *      ordinary login failures are merely logged.)
+ *   Connect/disconnect for an already-enrolled node stays a PATCH
+ *   `prefs` MaskedPrefs WantRunning (a false->true transition makes
+ *   Go call controlclient.Login itself); connect from NeedsLogin
+ *   additionally posts `login-interactive`. resetEnrolment is POST
+ *   `logout` + `reset-auth`. After the start chain, GET `status` is
+ *   read once and any Health entries become a sticky diagnostic
+ *   (see [stickyError]) so a silent Go-side stall stays visible.
  * - VPN handshake: [onVpnServiceRequested] wraps the host in
  *   [LibtailscaleIPNService] and calls `Libtailscale.requestVPN`;
  *   [onVpnServiceDisconnected] calls `Libtailscale.serviceDisconnect`.
@@ -80,6 +98,19 @@ class LibtailscaleBackend : TunnelBackend {
     @Volatile private var platformDnsConfig: String = ""
     @Volatile private var lastInterfaceName: String? = null
     @Volatile private var lastGateway: String? = null
+
+    /**
+     * An error/diagnostic that must survive Notify updates. Go only
+     * forwards vizerrors as Notify.ErrMessage, so without this the UI
+     * falls back to a bare, unexplained state (v0.1.0 showed a silent
+     * NeedsLogin). Set by login-chain failures and by Health entries
+     * in the post-chain status snapshot; cleared when the backend
+     * reaches Running or a new start attempt begins.
+     */
+    @Volatile private var stickyError: String? = null
+
+    /** Human-readable record of the last login chain round trip. */
+    @Volatile private var lastStartDiagnostic: String? = null
 
     override fun init(appServices: Any) {
         services = appServices as? LibtailscaleAppServices
@@ -125,16 +156,12 @@ class LibtailscaleBackend : TunnelBackend {
                     // process restart; never logged.
                     svc.encryptedPrefs.encrypt(AUTH_KEY_PREF, config.authKey)
                 }
-                val options = JSONObject()
-                if (authKey != null) options.put("AuthKey", authKey)
-                val updatePrefs = JSONObject()
-                config.hostname?.let { updatePrefs.put("HostName", it) }
-                config.loginServer?.let { updatePrefs.put("ControlURL", it) }
-                if (updatePrefs.length() > 0) options.put("UpdatePrefs", updatePrefs)
-                callApi(application, "POST", "start", options.toString().toByteArray(Charsets.UTF_8))
-                setWantRunning(application, true)
+                runLoginChain(application, config, authKey)
             } catch (e: Exception) {
-                updateStatus(status.copy(state = TunnelState.Error, lastError = e.message))
+                // Sticky: a later Notify must not wash this out (the
+                // v0.1.0 failure mode was an error-free NeedsLogin).
+                setStickyError(e.message ?: e.javaClass.simpleName)
+                updateStatus(status.copy(state = TunnelState.Error, lastError = stickyError))
             }
         }
     }
@@ -144,8 +171,15 @@ class LibtailscaleBackend : TunnelBackend {
             val application = app ?: return@execute reportUnavailable()
             try {
                 setWantRunning(application, true)
+                if (status.state == TunnelState.NeedsLogin) {
+                    // Same kick as login-chain step 3: from NeedsLogin
+                    // a WantRunning transition alone may not restart
+                    // the login attempt on the current control client.
+                    callApiChecked(application, "POST", "login-interactive", null)
+                }
             } catch (e: Exception) {
-                updateStatus(status.copy(state = TunnelState.Error, lastError = e.message))
+                setStickyError(e.message ?: e.javaClass.simpleName)
+                updateStatus(status.copy(state = TunnelState.Error, lastError = stickyError))
             }
         }
     }
@@ -165,12 +199,12 @@ class LibtailscaleBackend : TunnelBackend {
         executor.execute {
             val application = app ?: return@execute reportUnavailable()
             try {
-                callApi(application, "POST", "logout", null)
+                callApiChecked(application, "POST", "logout", null)
             } catch (_: Exception) {
                 // logout may legitimately fail when never enrolled.
             }
             try {
-                callApi(application, "POST", "reset-auth", null)
+                callApiChecked(application, "POST", "reset-auth", null)
             } catch (e: Exception) {
                 updateStatus(status.copy(lastError = e.message))
             }
@@ -265,26 +299,148 @@ class LibtailscaleBackend : TunnelBackend {
         val masked = JSONObject()
             .put("WantRunning", wantRunning)
             .put("WantRunningSet", true)
-        callApi(application, "PATCH", "prefs", masked.toString().toByteArray(Charsets.UTF_8))
+        callApiChecked(application, "PATCH", "prefs", masked.toString().toByteArray(Charsets.UTF_8))
     }
 
-    /** One LocalAPI round trip; throws on transport error or HTTP >= 400. */
+    private data class ApiResult(val statusCode: Int, val body: String)
+
+    /**
+     * Upstream's login chain (IpnViewModel.login), mirrored step for
+     * step; see the class doc. Any HTTP >= 400 or malformed response
+     * aborts the chain with an exception naming the step, the status
+     * code and the response body, and the caller makes it sticky.
+     * After a successful chain, GET status is read once: ipnstate
+     * Health entries (Go's own account of what is wrong, e.g. DNS or
+     * network problems that never become a Notify ErrMessage) are
+     * promoted to the sticky error so the stall is diagnosable from
+     * the UI instead of only from logcat.
+     */
+    private fun runLoginChain(
+        application: libtailscale.Application,
+        config: TunnelConfig,
+        authKey: String?,
+    ) {
+        stickyError = null
+        val steps = StringBuilder()
+
+        fun step(name: String, result: ApiResult) {
+            if (steps.isNotEmpty()) steps.append(", ")
+            steps.append(name).append(" -> HTTP ").append(result.statusCode)
+            if (result.statusCode >= 400) {
+                throw IllegalStateException(
+                    "login chain failed at $name: HTTP ${result.statusCode}: " +
+                        "${result.body.take(300)} (chain so far: $steps)",
+                )
+            }
+        }
+
+        // Step 1: editPrefs. Clears LoggedOut for auth-key logins
+        // (Go's startLocked will not log in while LoggedOut is set)
+        // and applies the HostName/ControlURL overrides. Deliberately
+        // does NOT set WantRunning here: upstream warns that doing so
+        // starts a login on the outgoing control client, which step 2
+        // then tears down mid-flight.
+        val mask = JSONObject()
+        if (authKey != null) {
+            mask.put("LoggedOut", false)
+            mask.put("LoggedOutSet", true)
+        }
+        config.hostname?.let {
+            mask.put("HostName", it)
+            mask.put("HostNameSet", true)
+        }
+        config.loginServer?.let {
+            mask.put("ControlURL", it)
+            mask.put("ControlURLSet", true)
+        }
+        val editResult = callApi(
+            application, "PATCH", "prefs",
+            mask.toString().toByteArray(Charsets.UTF_8),
+        )
+        step("editPrefs", editResult)
+
+        // Step 2: start, with UpdatePrefs = the full Prefs returned
+        // by step 1 (ipn.Options.UpdatePrefs replaces the stored
+        // Prefs wholesale), WantRunning set on it, plus the auth key.
+        val newPrefs = try {
+            JSONObject(editResult.body)
+        } catch (e: Exception) {
+            throw IllegalStateException(
+                "login chain failed at start: editPrefs returned no Prefs JSON " +
+                    "(${e.message}); chain so far: $steps",
+            )
+        }
+        newPrefs.put("WantRunning", true)
+        val options = JSONObject().put("UpdatePrefs", newPrefs)
+        if (authKey != null) options.put("AuthKey", authKey)
+        step(
+            "start",
+            callApi(
+                application, "POST", "start",
+                options.toString().toByteArray(Charsets.UTF_8),
+            ),
+        )
+
+        // Step 3: login-interactive — the unconditional
+        // controlclient.Login trigger on the new control client;
+        // upstream requires it for auth-key logins too.
+        step("login-interactive", callApi(application, "POST", "login-interactive", null))
+
+        // Post-chain diagnostic snapshot (not part of the chain: its
+        // failure does not fail the login, it is only recorded).
+        lastStartDiagnostic = try {
+            val statusResult = callApi(application, "GET", "status", null)
+            val statusJson = JSONObject(statusResult.body)
+            val backendState = statusJson.optString("BackendState", "?")
+            val health = statusJson.optJSONArray("Health")
+            val healthTexts = if (health == null) {
+                emptyList()
+            } else {
+                (0 until health.length()).map { health.optString(it) }.filter { it.isNotEmpty() }
+            }
+            val summary = "login chain ok ($steps); backend state: $backendState"
+            if (healthTexts.isNotEmpty()) {
+                stickyError = "$summary; health: ${healthTexts.joinToString("; ")}"
+            }
+            summary
+        } catch (e: Exception) {
+            "login chain ok ($steps); status snapshot failed: ${e.message}"
+        }
+    }
+
+    /** One LocalAPI round trip; throws only on transport error. */
     private fun callApi(
         application: libtailscale.Application,
         method: String,
         path: String,
         body: ByteArray?,
-    ): String {
+    ): ApiResult {
         val response = application.callLocalAPI(
             LOCAL_API_TIMEOUT_MS, method, "/localapi/v0/$path",
             body?.let { ByteArrayInputStreamAdapter(it) },
         )
         val data = response.bodyBytes() ?: ByteArray(0)
-        val text = data.toString(Charsets.UTF_8)
-        if (response.statusCode() >= 400) {
-            throw IllegalStateException("LocalAPI $method $path -> ${response.statusCode()}: $text")
+        return ApiResult(response.statusCode().toInt(), data.toString(Charsets.UTF_8))
+    }
+
+    /** [callApi] for callers that treat HTTP >= 400 as a failure. */
+    private fun callApiChecked(
+        application: libtailscale.Application,
+        method: String,
+        path: String,
+        body: ByteArray?,
+    ): String {
+        val result = callApi(application, method, path, body)
+        if (result.statusCode >= 400) {
+            throw IllegalStateException(
+                "LocalAPI $method $path -> ${result.statusCode}: ${result.body}",
+            )
         }
-        return text
+        return result.body
+    }
+
+    private fun setStickyError(message: String) {
+        stickyError = message
     }
 
     /** ipn.Notify handler — runs on a Go callback thread. */
@@ -349,8 +505,14 @@ class LibtailscaleBackend : TunnelBackend {
     }
 
     private fun updateStatus(newStatus: TunnelStatus) {
-        status = newStatus
-        listeners.forEach { it.onTunnelStatus(newStatus) }
+        var merged = newStatus
+        if (merged.state == TunnelState.Running) {
+            stickyError = null
+        } else if (merged.lastError == null && stickyError != null) {
+            merged = merged.copy(lastError = stickyError)
+        }
+        status = merged
+        listeners.forEach { it.onTunnelStatus(merged) }
     }
 
     /** libtailscale.InputStream over a byte array (upstream InputStreamAdapter shape). */
