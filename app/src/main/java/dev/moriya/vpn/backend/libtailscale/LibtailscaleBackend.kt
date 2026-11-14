@@ -63,7 +63,29 @@ import org.json.JSONObject
  *   `Libtailscale.onDNSConfigChanged` / `onGatewayChanged` when the
  *   values actually change (upstream NetworkChangeCallback semantics);
  *   [onPlatformDnsConfigChanged] stores the DNS config string that
- *   `AppContext.getPlatformDNSConfig` serves.
+ *   `AppContext.getPlatformDNSConfig` serves AND, when the string
+ *   itself changed, pokes `onDNSConfigChanged` — upstream's actual
+ *   trigger (maybeUpdateDNSConfig), which v0.1.1 missed, so a pure
+ *   DNS change never reached Go.
+ * - "Use Tailscale DNS" ([setUseTailscaleDns]) mirrors upstream's
+ *   DNSSettingsViewModel.toggleCorpDNS (PATCH prefs MaskedPrefs
+ *   CorpDNS); the current value is surfaced from Notify Prefs.
+ *   This is the private-DNS fix: with CorpDNS on (Go's fresh-prefs
+ *   default, and v0.1.1 exposed no way to change it), the DNS
+ *   manager compiles quad-100 as the OS resolver, updateTUN pushes
+ *   it as the VPN's DNS server, and Android's strict-mode Private
+ *   DNS (DoT) validation then targets 100.100.100.100:853 — which
+ *   netstack does not serve (wgengine/netstack notes such stray
+ *   DoT traffic) — so validation fails closed and all DNS dies
+ *   ("Private DNS: could not connect"). With CorpDNS off the OS
+ *   config is empty, no DNS server is pushed, and the platform
+ *   resolver/DoT stays on the underlying network, as in the stock
+ *   app with the setting off. Upstream's host has no automatic
+ *   private-DNS handling; the toggle is its only mechanism.
+ * - Self addresses / peer count: the Notify mask's NoNetmap leaves
+ *   NetMap empty and InitialStatus fires once pre-enrolment, so on
+ *   each transition into Running a one-shot GET `status` populates
+ *   them from the ipnstate payload instead.
  * - The auth key, when supplied once, is persisted through
  *   [EncryptedPrefStore] (Keystore AES-GCM) and reused on later starts
  *   so a restarted process can re-enrol without user input. It is
@@ -212,6 +234,32 @@ class LibtailscaleBackend : TunnelBackend {
         }
     }
 
+    override fun setUseTailscaleDns(enabled: Boolean) {
+        executor.execute {
+            val application = app ?: return@execute reportUnavailable()
+            try {
+                // Upstream DNSSettingsViewModel.toggleCorpDNS: PATCH
+                // prefs with MaskedPrefs CorpDNS. The backend then
+                // reconfigures OS DNS live (with CorpDNS off the DNS
+                // manager compiles an empty OS config, updateTUN
+                // pushes no DNS servers, and Android's resolver —
+                // Private DNS / DoT included — stays on the
+                // underlying network).
+                val masked = JSONObject()
+                    .put("CorpDNS", enabled)
+                    .put("CorpDNSSet", true)
+                callApiChecked(
+                    application, "PATCH", "prefs",
+                    masked.toString().toByteArray(Charsets.UTF_8),
+                )
+            } catch (e: Exception) {
+                updateStatus(
+                    status.copy(lastError = "Use Tailscale DNS change failed: ${e.message}"),
+                )
+            }
+        }
+    }
+
     override fun currentStatus(): TunnelStatus = status
 
     override fun addListener(listener: TunnelStatusListener) {
@@ -269,7 +317,22 @@ class LibtailscaleBackend : TunnelBackend {
     }
 
     override fun onPlatformDnsConfigChanged(config: String) {
+        val changed = config != platformDnsConfig
         platformDnsConfig = config
+        if (!changed || app == null) return
+        // Upstream parity (NetworkChangeCallback.maybeUpdateDNSConfig):
+        // a CHANGED DNS config string is itself the trigger for
+        // Libtailscale.onDNSConfigChanged — Go answers by re-reading
+        // AppContext.getPlatformDNSConfig and rebuilding the OS DNS
+        // config. v0.1.1 only stored the string and poked Go solely
+        // on interface-name changes, so a pure DNS change (same
+        // interface, same gateway) never reached the backend.
+        val ifname = lastInterfaceName ?: return
+        try {
+            libtailscale.Libtailscale.onDNSConfigChanged(ifname)
+        } catch (_: Throwable) {
+            // Backend not running; the next start re-reads the network.
+        }
     }
 
     // -- internals --
@@ -452,6 +515,9 @@ class LibtailscaleBackend : TunnelBackend {
         }
         var next = status
         json.optJSONObject("Prefs")?.let { prefs ->
+            if (prefs.has("CorpDNS") && !prefs.isNull("CorpDNS")) {
+                next = next.copy(useTailscaleDns = prefs.optBoolean("CorpDNS", true))
+            }
             if (prefs.optBoolean("LoggedOut", false) && next.state == TunnelState.Running) {
                 next = next.copy(state = TunnelState.NeedsLogin)
             }
@@ -481,7 +547,45 @@ class LibtailscaleBackend : TunnelBackend {
             val err = json.optString("ErrMessage")
             if (err.isNotEmpty()) next = next.copy(lastError = err)
         }
+        val wasRunning = status.state == TunnelState.Running
         if (next != status) updateStatus(next)
+        if (next.state == TunnelState.Running && !wasRunning) {
+            // The Notify mask includes NoNetmap, so NetMap-based
+            // address extraction never sees anything, and
+            // InitialStatus is only sent once at subscription time
+            // (before enrolment, when TailscaleIPs is still empty).
+            // Read GET status once per transition into Running and
+            // populate addresses/peers from the ipnstate payload.
+            // Off the callback thread: LocalAPI calls block.
+            executor.execute { refreshStatusSnapshot() }
+        }
+    }
+
+    /**
+     * GET `status` once and merge TailscaleIPs / Peer count into the
+     * current status. Diagnostic-grade only: failures are ignored and
+     * Notify remains authoritative for state.
+     */
+    private fun refreshStatusSnapshot() {
+        val application = app ?: return
+        try {
+            val result = callApi(application, "GET", "status", null)
+            if (result.statusCode >= 400) return
+            val json = JSONObject(result.body)
+            var next = status
+            val ips = json.optJSONArray("TailscaleIPs")
+            if (ips != null && ips.length() > 0) {
+                val list = (0 until ips.length()).map { ips.optString(it) }
+                    .filter { it.isNotEmpty() }
+                if (list.isNotEmpty()) next = next.copy(selfAddresses = list)
+            }
+            json.optJSONObject("Peer")?.let { peers ->
+                next = next.copy(peerCount = peers.length())
+            }
+            if (next != status) updateStatus(next)
+        } catch (_: Exception) {
+            // Snapshot is best-effort; the next transition retries.
+        }
     }
 
     private fun extractSelfAddresses(notify: JSONObject): List<String> {
@@ -508,6 +612,16 @@ class LibtailscaleBackend : TunnelBackend {
         var merged = newStatus
         if (merged.state == TunnelState.Running) {
             stickyError = null
+            // A lastError identical to the currently shown one was
+            // carried over from the previous status (onNotify builds
+            // its update from the current status), not reported fresh
+            // by this update: it is the sticky diagnostic, and
+            // reaching Running means it no longer applies. v0.1.1
+            // cleared only the sticky field, so the merged copy kept
+            // rendering under "Error:" while Running.
+            if (merged.lastError != null && merged.lastError == status.lastError) {
+                merged = merged.copy(lastError = null)
+            }
         } else if (merged.lastError == null && stickyError != null) {
             merged = merged.copy(lastError = stickyError)
         }

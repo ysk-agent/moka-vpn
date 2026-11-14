@@ -8,6 +8,7 @@ import android.view.Gravity
 import android.widget.Button
 import android.widget.EditText
 import android.widget.LinearLayout
+import android.widget.Switch
 import android.widget.TextView
 import dev.moriya.vpn.service.MokaVpnService
 import dev.moriya.vpn.tunnel.TunnelBackend
@@ -28,6 +29,10 @@ class MainActivity : Activity(), TunnelStatusListener {
     private lateinit var authKeyInput: EditText
     private lateinit var connectButton: Button
     private lateinit var disconnectButton: Button
+    private lateinit var dnsSwitch: Switch
+
+    /** True while [onTunnelStatus] syncs the switch from backend state. */
+    private var syncingDnsSwitch = false
 
     private val backend: TunnelBackend get() = (application as MokaVpnApp).backend
 
@@ -83,6 +88,25 @@ class MainActivity : Activity(), TunnelStatusListener {
             addView(disconnectButton)
         }
         root.addView(buttons)
+
+        // The stock app's "Use Tailscale DNS" setting. Off = the VPN
+        // pushes no DNS servers, so Android Private DNS (DoT) keeps
+        // working on the underlying network; MagicDNS names and
+        // tailnet resolvers are then not used.
+        dnsSwitch = Switch(this).apply {
+            text = "Use Tailscale DNS"
+            isEnabled = false
+            setPadding(0, 32, 0, 0)
+            setOnCheckedChangeListener { _, checked ->
+                if (!syncingDnsSwitch) backend.setUseTailscaleDns(checked)
+            }
+        }
+        root.addView(dnsSwitch)
+        root.addView(TextView(this).apply {
+            text = "Off: Android Private DNS (DoT) works; MagicDNS / " +
+                "tailnet DNS is not used. Same setting as the stock app."
+            textSize = 13f
+        })
         setContentView(root)
 
         backend.addListener(this)
@@ -104,6 +128,12 @@ class MainActivity : Activity(), TunnelStatusListener {
                 }
                 status.peerCount?.let { append("Peers: ").append(it).append('\n') }
                 status.lastError?.let { append("Error: ").append(it) }
+            }
+            status.useTailscaleDns?.let { enabled ->
+                syncingDnsSwitch = true
+                dnsSwitch.isChecked = enabled
+                dnsSwitch.isEnabled = true
+                syncingDnsSwitch = false
             }
         }
     }

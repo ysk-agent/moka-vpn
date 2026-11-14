@@ -48,6 +48,16 @@ data class TunnelStatus(
     /** Null when the backend cannot cheaply provide a peer count. */
     val peerCount: Int? = null,
     val lastError: String? = null,
+    /**
+     * Whether the backend installs the tailnet's DNS configuration
+     * on the OS (libtailscale: prefs CorpDNS, the stock app's
+     * "Use Tailscale DNS" setting). Null until the backend reports
+     * it. When false the VPN interface gets no DNS servers and the
+     * platform resolver — including Android Private DNS (DoT) —
+     * keeps working on the underlying network; the cost is that
+     * tailnet DNS (MagicDNS names, tailnet resolvers) is not used.
+     */
+    val useTailscaleDns: Boolean? = null,
 )
 
 interface TunnelStatusListener {
@@ -138,6 +148,14 @@ interface TunnelBackend {
 
     /** Forget enrolment (node key / auth state), for re-enrolment. */
     fun resetEnrolment()
+
+    /**
+     * Set whether the tailnet's DNS configuration is installed on
+     * the OS (see [TunnelStatus.useTailscaleDns]). Mirrors the stock
+     * app's "Use Tailscale DNS" setting; takes effect without a
+     * reconnect. Default: ignore (backends without the concept).
+     */
+    fun setUseTailscaleDns(enabled: Boolean) {}
 
     fun currentStatus(): TunnelStatus
 
