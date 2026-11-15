@@ -1,6 +1,7 @@
 package dev.moriya.vpn.extensions
 
 import android.content.Context
+import android.net.Network
 import dev.moriya.vpn.tunnel.TunnelBackend
 import dev.moriya.vpn.tunnel.TunnelStatus
 import dev.moriya.vpn.tunnel.TunnelStatusListener
@@ -32,6 +33,14 @@ class ExtensionManager(
     context: Context,
     private val backend: TunnelBackend,
     private val settings: ExtensionSettings,
+    /**
+     * The host's current underlying (non-VPN) network, for
+     * extensions that open their own sockets (v1.1.0: the Proxy's
+     * egress). Supplied by the service from its
+     * DefaultNetworkTracker; a Layer 1 facility, not a backend
+     * type. Default: none available.
+     */
+    private val underlyingNetwork: () -> Network? = { null },
 ) : TunnelStatusListener {
 
     private val appContext: Context = context.applicationContext
@@ -39,7 +48,8 @@ class ExtensionManager(
     /** The shared health channel the built-in extensions are wired around. */
     val healthResults = HealthResults()
 
-    private val extensions: List<VpnExtension> = Extensions.createAll(healthResults)
+    private val extensions: List<VpnExtension> =
+        Extensions.createAll(healthResults, underlyingNetwork)
     private val lock = Any()
     private val running = HashMap<String, VpnExtension>()
 
@@ -128,7 +138,14 @@ class ExtensionManager(
                 true
             }
         }
-        if (fresh) runCatching { extension.start(appContext) }
+        if (fresh) {
+            runCatching { extension.start(appContext) }
+            // Deliver the current status once, so an extension
+            // enabled while the tunnel is already up (the common
+            // case for the Proxy's listener) acts on the state as
+            // it is, not only on the next change (v1.1.0).
+            runCatching { extension.onTunnelStatus(backend.currentStatus()) }
+        }
     }
 
     private fun stopExtension(extension: VpnExtension) {

@@ -56,7 +56,14 @@ class MokaVpnService : VpnService(), TunHost {
         // die with this service — the process Android revives for
         // the always-on VPN — and are published for the UI through
         // the companion reference below.
-        extensionManager = ExtensionManager(this, backend, ExtensionSettings(this))
+        extensionManager = ExtensionManager(this, backend, ExtensionSettings(this)) {
+            // The Proxy extension's egress pins its sockets to the
+            // tracker's current underlying network (v1.1.0). The
+            // tracker is created just below; the lambda only runs
+            // when a proxy connection is attempted, long after both
+            // exist — the isInitialized guard covers the interval.
+            if (::networkTracker.isInitialized) networkTracker.current.network else null
+        }
         extensions = extensionManager
         extensionManager.start()
         // Default-network tracking (reduced NetworkChangeCallback,

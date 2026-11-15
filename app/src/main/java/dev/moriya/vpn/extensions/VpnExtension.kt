@@ -1,6 +1,7 @@
 package dev.moriya.vpn.extensions
 
 import android.content.Context
+import android.net.Network
 import dev.moriya.vpn.tunnel.TunnelStatus
 
 /**
@@ -76,16 +77,35 @@ object Extensions {
             "phone-node; also starts it once when the tunnel connects.",
     )
 
-    val ALL: List<ExtensionInfo> = listOf(HEALTH, STARTUP_MANAGEMENT)
+    val PROXY = ExtensionInfo(
+        id = "proxy",
+        displayName = "Proxy",
+        // Opens a listening socket, so it is opt-in like startup
+        // management.
+        defaultEnabled = false,
+        description = "Forward proxy on this node's tailnet address " +
+            "(port 8080) for Moriya's own devices; traffic leaves " +
+            "through this phone's network.",
+    )
+
+    val ALL: List<ExtensionInfo> = listOf(HEALTH, STARTUP_MANAGEMENT, PROXY)
 
     /**
      * Build the extension instances. [healthResults] is the shared
      * channel between them: the Health extension publishes into it,
      * Startup management consumes from it (wired by the host, per
-     * the v1.0.0 design).
+     * the v1.0.0 design). [underlyingNetwork] supplies the host's
+     * current non-VPN network (Layer 1's DefaultNetworkTracker pick,
+     * passed through by the manager) for extensions whose sockets
+     * must egress on the physical network — the Proxy's outbound
+     * connections; it is a Layer 1 facility, not a backend type.
      */
-    fun createAll(healthResults: HealthResults): List<VpnExtension> = listOf(
+    fun createAll(
+        healthResults: HealthResults,
+        underlyingNetwork: () -> Network?,
+    ): List<VpnExtension> = listOf(
         HealthExtension(HEALTH, healthResults),
         StartupManagementExtension(STARTUP_MANAGEMENT, healthResults),
+        ProxyExtension(PROXY, underlyingNetwork),
     )
 }

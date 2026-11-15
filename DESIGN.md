@@ -23,7 +23,10 @@ Android Private DNS breakage, plus status-display fixes. v0.1.3 added
 the host-side AdGuard DNS mode and the in-app version display.
 **v1.0.0 (2026-11-15)** adds the extension architecture (§9) with the
 Health and Startup management extensions — the helper that was this
-app's founding purpose — and the state-divergence fix (§9.4). The
+app's founding purpose — and the state-divergence fix (§9.5).
+**v1.1.0 (2026-11-15)** adds the Proxy extension (§9.6), the third
+built-in extension, and current-status delivery when an extension is
+started. The
 major bump is deliberate: the app is no longer only a VPN client, it
 is a host for node-stack features.
 
@@ -513,7 +516,7 @@ owned by the manager: the Health extension publishes poll results
 into it, Startup management consumes them. Extensions never
 reference each other directly, so either side can change alone.
 
-### 9.4 The two built-in extensions
+### 9.4 The built-in extensions
 
 - **Health** (`health`, default on — pure observation). Polls
   `http://127.0.0.1:4096/global/health` (opencode serve on the same
@@ -543,6 +546,9 @@ The cascade this completes: system revives the always-on VPN app →
 startup management notices the dead stack → phone-node restarts →
 its guest supervisor restarts opencode serve.
 
+- **Proxy** (`proxy`, default off — it opens a listening socket),
+  added in v1.1.0: see §9.6.
+
 ### 9.5 State-divergence fix (also v1.0.0)
 
 Found on device 2026-11-15: the app could show `State: Running`
@@ -562,3 +568,74 @@ tunnel had been torn down and the host did not follow. Three fixes:
   key); when a key is saved the field's hint says so, the field is
   cleared after a start, and an empty field on Connect means "use
   the saved key".
+
+### 9.6 Proxy extension (v1.1.0)
+
+The third built-in extension (`proxy`, default off — it opens a
+listening socket, so it is opt-in like startup management): the
+forward proxy phone-node carries today, hosted by the VPN app
+instead. Clients on the tailnet connect to the proxy; their traffic
+leaves through this phone's network, so the egress IP is this
+phone's location. Hosted here, the proxy lives in the process
+Android revives and is independent of the proot/opencode stack —
+it keeps working while that stack is down, which is the same
+separation argument as the helper (§9).
+
+Semantics mirror phone-node's native proxy (CONNECT tunnelling
+plus plain-HTTP absolute-URI forwarding, 120 s read-idle timeouts,
+half-close relay). The code is split by testability:
+`ProxyProtocol` holds the protocol decisions as pure functions
+(request-line and CONNECT-authority parsing, absolute-URI
+splitting, the allowlist decision, proxy-header stripping, the
+byte-wise header-block reader) and is covered by plain-JVM tests
+in `tests/proxy/`; `ProxyServerCore` is sockets, threads and
+counters only. JVM socket tests cannot run on the build VM (its
+JVM TCP is intercepted), so the core's transit behaviour is
+device-verified only — the same position phone-node's proxy was
+in. Concurrency is capped at 32 simultaneous connections to keep
+the host process cheap; further accepts are closed and counted as
+rejected. Target URLs are never logged.
+
+- **Listening.** Port 8080, bound to the node's tailnet IPv4 from
+  `TunnelStatus.selfAddresses` — a specific address, not the
+  reference proxy's wildcard, so the listener is not exposed on
+  the LAN. It exists only while the extension is enabled AND the
+  backend is Running; it follows address changes (rebind) and
+  disappears with either condition. So that toggling the extension
+  on while the tunnel is already up works, `ExtensionManager` now
+  delivers the backend's current status to an extension once,
+  right after starting it (also v1.1.0).
+- **Allowlist.** Only Moriya's own devices at their current
+  tailnet addresses (Muse VM `muse-2` ***REMOVED***, Mac `m1`
+  ***REMOVED***, the stock-app `moto` node ***REMOVED***) plus
+  loopback; anything else gets 403 and is closed. The list is a
+  code constant. It is deliberately NOT copied from phone-node's
+  allowlist, which still carries the retired VM address
+  ***REMOVED*** — that staleness ends here.
+- **Outbound egress — the load-bearing decision.** The proxy runs
+  in the VPN app's own process, so an unbound outbound socket
+  would follow whatever routing the system applies to our own UID
+  — the tunnel's routes today, something else under a future
+  configuration (e.g. an exit node). Instead, every outbound
+  connection is pinned to the device's underlying (non-VPN)
+  network: the host's `DefaultNetworkTracker` pick is passed to
+  the extension through `ExtensionManager` as a `() -> Network?`
+  provider (a Layer 1 facility, not a backend type — no Layer 2
+  contract change), and `NetworkEgress` resolves the target on
+  that network, binds the socket with `Network.bindSocket`, and
+  connects with a 10 s timeout. This is exactly the treatment
+  Layer 3 gives the Go backend's dials (same tracker, same bind
+  operation). When no underlying network is known, the connection
+  is refused (502) rather than dialled unbound. A consequence, by
+  design: proxy destinations inside the tailnet itself are also
+  attempted on the physical network and simply fail — the proxy
+  is an internet-egress tool, not a tunnel shortcut.
+- **Coexistence with phone-node's proxy.** That proxy binds the
+  wildcard address on the same port 8080, which blocks any other
+  bind of the port on the device — so the two proxies cannot run
+  at once on one phone. When the bind fails, this extension
+  records the error in its status line (never throws into the
+  host service) and retries every 15 s and on every tunnel status
+  change, so its listener appears if phone-node's proxy later
+  stops. In practice a node runs one proxy or the other; this one
+  is the survivor when the node stack is down.
