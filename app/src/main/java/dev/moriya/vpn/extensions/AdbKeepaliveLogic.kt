@@ -13,7 +13,13 @@ package dev.moriya.vpn.extensions
  */
 object AdbKeepaliveLogic {
 
-    /** The only setting this extension ever reads or writes. */
+    /**
+     * The only setting the keepalive decision concerns — the
+     * watcher reads and writes this key and no other. (The
+     * extension's control endpoint writes `adb_enabled`, but only
+     * on an authorized command, never from this logic; see
+     * [AdbControlProtocol].)
+     */
     const val SETTING_KEY = "adb_wifi_enabled"
 
     enum class Action {

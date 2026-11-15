@@ -28,7 +28,12 @@ app's founding purpose — and the state-divergence fix (§9.5).
 built-in extension, and current-status delivery when an extension is
 started. **v1.2.0 (2026-11-16)** adds the ADB keepalive extension
 (§9.7), the fourth built-in, which guards the wireless-debugging
-toggle the node phones' adb access depends on. The
+toggle the node phones' adb access depends on. **v1.3.0
+(2026-11-16)** extends that extension with a remote debug control
+endpoint (§9.7): an allowlist- and token-guarded listener on the
+node's tailnet address through which the VM can turn USB
+debugging on and off — the recovery path for mobile data, where
+wireless debugging cannot keep adbd alive. The
 major bump is deliberate: the app is no longer only a VPN client, it
 is a host for node-stack features.
 
@@ -551,7 +556,8 @@ its guest supervisor restarts opencode serve.
 - **Proxy** (`proxy`, default off — it opens a listening socket),
   added in v1.1.0: see §9.6.
 - **ADB keepalive** (`adb-keepalive`, default off — it writes a
-  system setting), added in v1.2.0: see §9.7.
+  system setting), added in v1.2.0: see §9.7. v1.3.0 extends it
+  with the remote debug control endpoint (§9.7).
 
 ### 9.5 State-divergence fix (also v1.0.0)
 
@@ -670,10 +676,15 @@ toggle carries no such problem.
 
 - **What it watches.** Every 60 s (the Health extension's cadence)
   it reads Settings.Global `adb_wifi_enabled`. That is the only
-  setting it ever reads or writes: **`adb_enabled` is never
-  touched, under any circumstance** — writing it would
-  reintroduce the app-refusal problem the wireless-only setup
-  exists to avoid.
+  setting the watcher ever reads or writes: **`adb_enabled` is
+  never touched by any automatic logic** — turning USB debugging
+  on autonomously would reintroduce the app-refusal problem the
+  wireless-only setup exists to avoid. Since v1.3.0 the one
+  exception is deliberate, not automatic: the control endpoint
+  below writes `adb_enabled`, but only on an explicit command
+  that has passed its allowlist and token checks (see **Remote
+  debug control**). The separation is structural — the watcher's
+  decision logic has no path to that key.
 - **The decision** lives in `AdbKeepaliveLogic` as a pure function
   of (toggle value, grant held, Wi-Fi connected), covered by
   plain-JVM tests in `tests/adb-keepalive/`; the extension class
@@ -713,12 +724,72 @@ toggle carries no such problem.
   discoverable from the UI. A write that still throws
   `SecurityException` (grant revoked between check and write) is
   recorded in the status line, never thrown into the host.
+- **Remote debug control (v1.3.0).** The gap the watcher cannot
+  cover: wireless debugging needs Wi-Fi, so on mobile data adbd
+  stops and tailnet adb dies — while the tunnel itself stays
+  alive (both measured on moto g05, 2026-11-16). Moriya's
+  workaround is to turn USB debugging on as needed: adbd revives
+  and the persisted 5555 listener returns with it, no `tcpip`
+  re-run needed. The endpoint makes that switch reachable from
+  the VM over the tunnel. While the extension is enabled, a small
+  HTTP listener is bound to the node's tailnet IPv4 (from
+  `TunnelStatus.selfAddresses`, never the wildcard, so it is not
+  exposed on the LAN) on port **8091**, only while the backend is
+  Running; it follows address changes and retries a failed bind
+  every 15 s — the Proxy extension's listening discipline, at a
+  smaller scale (concurrency capped at 8, 30 s idle timeouts).
+  The code splits by testability as before: `AdbControlProtocol`
+  holds the authorization decision as pure functions (covered by
+  plain-JVM tests in `tests/adb-control/`), `AdbControlServerCore`
+  is sockets and audit counters only, and the settings writes
+  live in the extension class. Exactly three commands exist —
+  `POST /adb-enabled/on` and `POST /adb-enabled/off` (write
+  `adb_enabled` 1/0 and answer with the read-back value) and
+  `GET /status` (answers `adb_wifi_enabled`, `adb_enabled` and
+  the grant state as plain text) — and nothing else: there is no
+  generic settings or shell surface. Responses are 200 on
+  success, 403 for allowlist/token failures, 404 for anything
+  else; a write refused by the system (`SecurityException`, or
+  the grant missing) answers 500, is recorded in the status line,
+  and never crashes the host.
+- **Authorization: allowlist AND token, both required.** The
+  source address must be on the Proxy extension's allowlist
+  (Moriya's own devices at their current tailnet addresses, plus
+  loopback) AND the request must carry the per-device token in
+  an `X-Moka-Token` header, compared in constant time; either
+  factor alone authorizes nothing, and an unknown path or wrong
+  method is only distinguishable after both pass. The token is
+  generated once on the device (32 secure-random bytes, hex)
+  when the extension first starts, persisted in the plain
+  `mokavpn-settings` prefs (app-private), and shown in the
+  extension's status line: the owner's handover channel is
+  reading it off the phone screen once and saving it on the VM.
+  There is no regenerate UI in this version; clearing the app's
+  data is the rotation path. The status line also audits the
+  endpoint: listener state (bound address:port or the bind
+  error), the last accepted command (action, source, time), and
+  a count of denied attempts.
+- **VM-side helper.** `tools/moka-adb-debug on|off|status` reads
+  the token from `~/.config/moka-vpn/adb-debug-token` (mode 600;
+  the script fails with instructions when the file is missing
+  and never invents a value) and calls
+  `http://***REMOVED***:8091/...` through the tunnel proxy,
+  derived from `HTTPS_PROXY` exactly as the adb relay derives it
+  (`"${HTTPS_PROXY%:*}:3130"`). The node address is the current
+  trial node's; the endpoint itself binds whatever tailnet IPv4
+  the backend reports.
 - **Limitation, stated plainly.** This extension guards the
   toggle, not the listener configuration. After a device reboot,
   the `adb tcpip 5555` configuration itself is gone
   (`service.adb.tcp.port` does not survive a reboot), so the
   extension alone cannot restore 5555: one wireless-debugging
-  connect plus an `adb tcpip 5555` re-run is needed first. It also
-  cannot restore anything while Wi-Fi is down, and like every
-  extension it only runs while the host service lives — the
-  always-on designation is its anchor, as for the rest of §9.
+  connect plus an `adb tcpip 5555` re-run is needed first. The
+  control endpoint has the same boundary: after a reboot it can
+  still turn `adb_enabled` on, but with the tcpip configuration
+  gone there is no 5555 listener for the VM to reach, so VM
+  reachability is not restored — the endpoint covers the
+  adbd-stopped case (mobile data, a spontaneously dropped
+  toggle), not the reboot case. The watcher also cannot restore
+  anything while Wi-Fi is down, and like every extension both
+  halves only run while the host service lives — the always-on
+  designation is its anchor, as for the rest of §9.

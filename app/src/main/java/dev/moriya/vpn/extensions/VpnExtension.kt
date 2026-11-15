@@ -96,8 +96,12 @@ object Extensions {
         defaultEnabled = false,
         description = "Keeps wireless debugging on: if it turns " +
             "itself off while Wi-Fi is connected, turns it back on " +
-            "so adb on port 5555 keeps answering. Needs a one-time " +
-            "grant: adb shell pm grant dev.moriya.vpn " +
+            "so adb on port 5555 keeps answering. Also serves a " +
+            "token-guarded control endpoint on this node's tailnet " +
+            "address (port 8091) so the VM can turn USB debugging " +
+            "on/off when wireless debugging is unavailable (e.g. " +
+            "on mobile data). Needs a one-time grant: " +
+            "adb shell pm grant dev.moriya.vpn " +
             "android.permission.WRITE_SECURE_SETTINGS",
     )
 
