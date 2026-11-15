@@ -58,6 +58,23 @@ data class TunnelStatus(
      * tailnet DNS (MagicDNS names, tailnet resolvers) is not used.
      */
     val useTailscaleDns: Boolean? = null,
+    /**
+     * Whether the host installs AdGuard's public DNS servers
+     * (94.140.14.14 / 94.140.15.15 and their IPv6 counterparts, the
+     * filtering "Default" configuration) as the VPN's DNS servers
+     * when the TUN is established. A host-side setting, not a
+     * backend one: the backend pushes no DNS servers of its own
+     * while this is on (it forces [useTailscaleDns] off, since the
+     * platform builder is additive and the two sets cannot be
+     * merged), and the adapter's TUN builder adds AdGuard's
+     * addresses at establish time instead. Queries then egress over
+     * the underlying network in plain DNS — the filtering applies,
+     * but unlike Android Private DNS (DoT) they are not encrypted,
+     * so the recommended pairing is Private DNS on Automatic.
+     * Applies when the TUN is (re)established, not retroactively to
+     * a live TUN. Persisted by Layer 3 across process restarts.
+     */
+    val adguardDns: Boolean = false,
 )
 
 interface TunnelStatusListener {
@@ -156,6 +173,17 @@ interface TunnelBackend {
      * reconnect. Default: ignore (backends without the concept).
      */
     fun setUseTailscaleDns(enabled: Boolean) {}
+
+    /**
+     * Set whether AdGuard's public DNS servers are installed as
+     * the VPN's DNS servers at TUN establishment (see
+     * [TunnelStatus.adguardDns]). Enabling it also turns
+     * [setUseTailscaleDns] off (the builder cannot hold both sets);
+     * enabling that in turn turns this off. Takes effect when the
+     * TUN is next (re)established. Default: ignore (backends
+     * without host-side DNS injection).
+     */
+    fun setAdguardDns(enabled: Boolean) {}
 
     fun currentStatus(): TunnelStatus
 

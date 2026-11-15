@@ -70,6 +70,22 @@ import org.json.JSONObject
  * - "Use Tailscale DNS" ([setUseTailscaleDns]) mirrors upstream's
  *   DNSSettingsViewModel.toggleCorpDNS (PATCH prefs MaskedPrefs
  *   CorpDNS); the current value is surfaced from Notify Prefs.
+ * - "AdGuard DNS" ([setAdguardDns]) is a host-side mode, not a Go
+ *   setting: a flag persisted in plain SharedPreferences
+ *   ([LibtailscaleAppServices.settingsPrefs] — not the encrypted
+ *   store; it is not secret). While on, the backend forces CorpDNS
+ *   off through the same MaskedPrefs PATCH (the platform builder
+ *   is additive, so Go's servers and AdGuard's cannot coexist),
+ *   and [LibtailscaleVPNServiceBuilder] adds AdGuard's public
+ *   servers at TUN establish time instead. Turning "Use Tailscale
+ *   DNS" on turns the flag off. The flag applies when the TUN is
+ *   next (re)established: Go offers the host no way to force a TUN
+ *   rebuild with an unchanged Go-side config (onVPNRequested is a
+ *   no-op for the same service instance, and updateTUN is gated on
+ *   the router/DNS config actually changing), so a live TUN keeps
+ *   its DNS set until it is rebuilt — by a reconnect, or by the
+ *   CorpDNS transition the toggle itself drives when CorpDNS was
+ *   on. WantRunning and the enrolment are never touched.
  *   This is the private-DNS fix: with CorpDNS on (Go's fresh-prefs
  *   default, and v0.1.1 exposed no way to change it), the DNS
  *   manager compiles quad-100 as the OS resolver, updateTUN pushes
@@ -122,6 +138,13 @@ class LibtailscaleBackend : TunnelBackend {
     @Volatile private var lastGateway: String? = null
 
     /**
+     * Host-side AdGuard DNS mode (see the class doc). Persisted in
+     * plain SharedPreferences; read back in [init]. Read live by
+     * the TUN builder bridge at establish time.
+     */
+    @Volatile private var adguardDns: Boolean = false
+
+    /**
      * An error/diagnostic that must survive Notify updates. Go only
      * forwards vizerrors as Notify.ErrMessage, so without this the UI
      * falls back to a bare, unexplained state (v0.1.0 showed a silent
@@ -138,6 +161,10 @@ class LibtailscaleBackend : TunnelBackend {
         services = appServices as? LibtailscaleAppServices
             ?: error("LibtailscaleBackend requires LibtailscaleAppServices")
         val svc = services!!
+        adguardDns = svc.settingsPrefs.getBoolean(ADGUARD_DNS_PREF, false)
+        if (adguardDns) {
+            status = status.copy(adguardDns = true)
+        }
         val appContext = LibtailscaleAppContext(
             data = svc.appContextData,
             platformDnsConfig = { platformDnsConfig },
@@ -238,26 +265,79 @@ class LibtailscaleBackend : TunnelBackend {
         executor.execute {
             val application = app ?: return@execute reportUnavailable()
             try {
-                // Upstream DNSSettingsViewModel.toggleCorpDNS: PATCH
-                // prefs with MaskedPrefs CorpDNS. The backend then
-                // reconfigures OS DNS live (with CorpDNS off the DNS
-                // manager compiles an empty OS config, updateTUN
-                // pushes no DNS servers, and Android's resolver —
-                // Private DNS / DoT included — stays on the
-                // underlying network).
-                val masked = JSONObject()
-                    .put("CorpDNS", enabled)
-                    .put("CorpDNSSet", true)
-                callApiChecked(
-                    application, "PATCH", "prefs",
-                    masked.toString().toByteArray(Charsets.UTF_8),
-                )
+                if (enabled && adguardDns) {
+                    // Mutually exclusive with AdGuard DNS: the
+                    // builder cannot hold both DNS sets.
+                    setAdguardDnsFlag(false)
+                }
+                patchCorpDns(application, enabled)
             } catch (e: Exception) {
                 updateStatus(
                     status.copy(lastError = "Use Tailscale DNS change failed: ${e.message}"),
                 )
             }
         }
+    }
+
+    override fun setAdguardDns(enabled: Boolean) {
+        executor.execute {
+            // Persist first: the flag is host-side state and must
+            // survive even if the CorpDNS PATCH below fails (the
+            // error is reported, and the next TUN rebuild would
+            // otherwise silently lose the user's choice).
+            setAdguardDnsFlag(enabled)
+            if (!enabled) return@execute
+            val application = app ?: return@execute reportUnavailable()
+            try {
+                // AdGuard mode requires CorpDNS off: VpnService.
+                // Builder is additive, so any server Go pushed
+                // would stay alongside AdGuard's. Reuses the
+                // toggleCorpDNS PATCH path. When CorpDNS was on,
+                // this transition also makes Go rebuild the TUN,
+                // which is what applies AdGuard's servers without
+                // waiting for a reconnect.
+                patchCorpDns(application, false)
+            } catch (e: Exception) {
+                updateStatus(
+                    status.copy(lastError = "AdGuard DNS change failed: ${e.message}"),
+                )
+            }
+        }
+    }
+
+    /** Persist + publish the AdGuard flag. Executor thread only. */
+    private fun setAdguardDnsFlag(enabled: Boolean) {
+        adguardDns = enabled
+        try {
+            services?.settingsPrefs?.edit()
+                ?.putBoolean(ADGUARD_DNS_PREF, enabled)
+                ?.apply()
+        } catch (_: Exception) {
+            // Persistence is best-effort; the in-memory flag and the
+            // status update below still carry the user's choice for
+            // this process.
+        }
+        if (status.adguardDns != enabled) {
+            updateStatus(status.copy(adguardDns = enabled))
+        }
+    }
+
+    /**
+     * Upstream DNSSettingsViewModel.toggleCorpDNS: PATCH prefs with
+     * MaskedPrefs CorpDNS. The backend then reconfigures OS DNS
+     * live (with CorpDNS off the DNS manager compiles an empty OS
+     * config, updateTUN pushes no DNS servers, and Android's
+     * resolver — Private DNS / DoT included — stays on the
+     * underlying network).
+     */
+    private fun patchCorpDns(application: libtailscale.Application, enabled: Boolean) {
+        val masked = JSONObject()
+            .put("CorpDNS", enabled)
+            .put("CorpDNSSet", true)
+        callApiChecked(
+            application, "PATCH", "prefs",
+            masked.toString().toByteArray(Charsets.UTF_8),
+        )
     }
 
     override fun currentStatus(): TunnelStatus = status
@@ -278,7 +358,7 @@ class LibtailscaleBackend : TunnelBackend {
             host.onVpnStatusChanged(false)
             return
         }
-        val bridge = LibtailscaleIPNService(host)
+        val bridge = LibtailscaleIPNService(host) { adguardDns }
         synchronized(ipnServices) { ipnServices[host.hostId] = bridge }
         try {
             libtailscale.Libtailscale.requestVPN(bridge)
@@ -650,5 +730,7 @@ class LibtailscaleBackend : TunnelBackend {
         private const val NOTIFY_MASK: Long = 28806L
         private const val LOCAL_API_TIMEOUT_MS: Long = 30_000
         private const val AUTH_KEY_PREF = "mokavpn-auth-key"
+        /** Plain-prefs key for the host-side AdGuard DNS flag. */
+        private const val ADGUARD_DNS_PREF = "mokavpn-adguard-dns"
     }
 }

@@ -1,6 +1,7 @@
 package dev.moriya.vpn.backend.libtailscale
 
 import android.content.Context
+import android.content.SharedPreferences
 import android.os.Build
 import android.provider.Settings
 import dev.moriya.vpn.tunnel.TunBuilder
@@ -39,6 +40,14 @@ class LibtailscaleAppServices private constructor(
     val dataDir: String,
     val appContextData: LibtailscaleAppContextData,
     val encryptedPrefs: EncryptedPrefStore,
+    /**
+     * Plain (unencrypted) preferences for host-side settings that
+     * are not secret — currently the AdGuard DNS flag. Deliberately
+     * NOT [encryptedPrefs]: that store is for node key material and
+     * the auth key, and a UI preference gains nothing from Keystore
+     * encryption.
+     */
+    val settingsPrefs: SharedPreferences,
 ) {
     companion object {
         fun create(context: Context): LibtailscaleAppServices {
@@ -47,6 +56,9 @@ class LibtailscaleAppServices private constructor(
                 dataDir = context.filesDir.absolutePath,
                 appContextData = LibtailscaleAppContextData(appContext),
                 encryptedPrefs = EncryptedPrefStore(appContext),
+                settingsPrefs = appContext.getSharedPreferences(
+                    "mokavpn-settings", Context.MODE_PRIVATE,
+                ),
             )
         }
     }
@@ -262,11 +274,15 @@ class LibtailscaleAppContext(
  * (interfaces.go §3.3). Holds no state of its own; protect/builder
  * calls forward to the host, lifecycle calls forward the other way.
  */
-class LibtailscaleIPNService(private val host: TunHost) : libtailscale.IPNService {
+class LibtailscaleIPNService(
+    private val host: TunHost,
+    /** Live supplier for the host-side AdGuard DNS flag (backend-owned). */
+    private val adguardDnsEnabled: () -> Boolean = { false },
+) : libtailscale.IPNService {
     override fun id(): String = host.hostId
     override fun protect(fd: Int): Boolean = host.protect(fd)
     override fun newBuilder(): libtailscale.VPNServiceBuilder =
-        LibtailscaleVPNServiceBuilder(host.newTunBuilder())
+        LibtailscaleVPNServiceBuilder(host.newTunBuilder(), adguardDnsEnabled)
     override fun close() = host.onVpnDisconnected()
     override fun disconnectVPN() = host.onVpnDisconnected()
     override fun updateVpnStatus(active: Boolean) = host.onVpnStatusChanged(active)
@@ -278,8 +294,11 @@ class LibtailscaleIPNService(private val host: TunHost) : libtailscale.IPNServic
  * libtailscale.ParcelFileDescriptor whose detach() is
  * TunSession.detachFd().
  */
-class LibtailscaleVPNServiceBuilder(private val builder: TunBuilder) :
-    libtailscale.VPNServiceBuilder {
+class LibtailscaleVPNServiceBuilder(
+    private val builder: TunBuilder,
+    /** Live supplier for the host-side AdGuard DNS flag (backend-owned). */
+    private val adguardDnsEnabled: () -> Boolean = { false },
+) : libtailscale.VPNServiceBuilder {
     override fun setMTU(mtu: Int) = builder.setMtu(mtu)
     override fun addDNSServer(address: String) = builder.addDnsServer(address)
     override fun addSearchDomain(domain: String) = builder.addSearchDomain(domain)
@@ -287,9 +306,36 @@ class LibtailscaleVPNServiceBuilder(private val builder: TunBuilder) :
     override fun excludeRoute(address: String, prefix: Int) = builder.excludeRoute(address, prefix)
     override fun addAddress(address: String, prefix: Int) = builder.addAddress(address, prefix)
     override fun establish(): libtailscale.ParcelFileDescriptor? {
+        if (adguardDnsEnabled()) {
+            // AdGuard DNS mode (host-side setting, see
+            // TunnelStatus.adguardDns): Go pushed no DNS servers of
+            // its own — the backend forces CorpDNS off while this
+            // mode is on — and VpnService.Builder is additive (a
+            // pushed server cannot be removed), so adding AdGuard's
+            // here, after Go's addDNSServer calls and before
+            // establish, makes them the VPN's DNS servers. The
+            // addresses are public, not tailnet routes, so the
+            // resolver's queries egress over the underlying network.
+            for (server in ADGUARD_DNS_SERVERS) builder.addDnsServer(server)
+        }
         val session = builder.establish() ?: return null
         return object : libtailscale.ParcelFileDescriptor {
             override fun detach(): Int = session.detachFd()
         }
+    }
+
+    companion object {
+        /**
+         * AdGuard's public DNS servers, "Default" (ad/tracker
+         * filtering) configuration, as published by AdGuard:
+         * 94.140.14.14 / 94.140.15.15 and
+         * 2a10:50c0::ad1:ff / 2a10:50c0::ad2:ff.
+         */
+        val ADGUARD_DNS_SERVERS: List<String> = listOf(
+            "94.140.14.14",
+            "94.140.15.15",
+            "2a10:50c0::ad1:ff",
+            "2a10:50c0::ad2:ff",
+        )
     }
 }

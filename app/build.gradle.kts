@@ -16,8 +16,8 @@ android {
         applicationId = "dev.moriya.vpn"
         minSdk = 29
         targetSdk = 34
-        versionCode = 3
-        versionName = "0.1.2"
+        versionCode = 4
+        versionName = "0.1.3"
 
         // The gomobile AAR carries libgojni.so for four ABIs (~135 MB
         // total; the first CI APK was 138 MB). All target devices

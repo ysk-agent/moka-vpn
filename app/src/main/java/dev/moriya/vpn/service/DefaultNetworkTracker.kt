@@ -24,6 +24,22 @@ import java.net.Inet4Address
  * - forwarding the platform DNS config string
  *   (`TunnelBackend.onPlatformDnsConfigChanged`; format follows
  *   upstream DnsConfig: "dns1 dns2 …" plus "\nsearch-domains").
+ *
+ * One deliberate deviation from a pure callback port: [start]
+ * seeds [current] synchronously from the system's current default
+ * network before registering the callback. Upstream registers its
+ * callback in the Application, long before any connect, so its
+ * cached default network is populated by the time the first TUN is
+ * built. This tracker is service-scoped — it starts in
+ * MokaVpnService.onCreate, moments before the backend may build
+ * the first TUN — and registerNetworkCallback delivers its initial
+ * events asynchronously, so without the seed the first builder
+ * could read a null network and bake an empty underlying-networks
+ * array into the TUN's LinkProperties. A VPN network with no
+ * underlying networks gives the platform resolver no underlying
+ * path to inherit DNS (and Private DNS validation) from, which is
+ * the leading host-side suspect for the strict-Private-DNS failure
+ * seen on device with CorpDNS off (v0.1.2, 2026-11-15).
  */
 class DefaultNetworkTracker(
     context: Context,
@@ -55,6 +71,28 @@ class DefaultNetworkTracker(
 
     fun start() {
         if (callback != null) return
+        // Synchronous seed (see class doc): populate the pick from
+        // the system's current default network right away. Only a
+        // non-VPN network qualifies — when the service is restarted
+        // while our own VPN is already up, activeNetwork IS the VPN,
+        // and seeding it would feed the tunnel back into itself.
+        try {
+            connectivityManager.activeNetwork?.let { network ->
+                val caps = connectivityManager.getNetworkCapabilities(network)
+                if (caps?.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN) == true) {
+                    synchronized(lock) {
+                        activeNetworks[network] = Info(
+                            caps = caps,
+                            linkProps = connectivityManager.getLinkProperties(network),
+                        )
+                        recomputeLocked()
+                    }
+                }
+            }
+        } catch (_: Exception) {
+            // Seeding is best-effort; the callback below delivers
+            // the same state asynchronously.
+        }
         val request = NetworkRequest.Builder()
             .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
             .addCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN)

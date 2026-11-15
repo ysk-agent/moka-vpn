@@ -30,9 +30,23 @@ class MainActivity : Activity(), TunnelStatusListener {
     private lateinit var connectButton: Button
     private lateinit var disconnectButton: Button
     private lateinit var dnsSwitch: Switch
+    private lateinit var adguardSwitch: Switch
 
     /** True while [onTunnelStatus] syncs the switch from backend state. */
     private var syncingDnsSwitch = false
+
+    /** True while [onTunnelStatus] syncs the AdGuard switch from status. */
+    private var syncingAdguardSwitch = false
+
+    /** Own version as installed, from the package manager (not hardcoded). */
+    private val appVersionName: String by lazy {
+        try {
+            @Suppress("DEPRECATION")
+            packageManager.getPackageInfo(packageName, 0).versionName ?: "?"
+        } catch (_: Exception) {
+            "?"
+        }
+    }
 
     private val backend: TunnelBackend get() = (application as MokaVpnApp).backend
 
@@ -107,6 +121,27 @@ class MainActivity : Activity(), TunnelStatusListener {
                 "tailnet DNS is not used. Same setting as the stock app."
             textSize = 13f
         })
+
+        // Host-side AdGuard DNS mode: the VPN's TUN is established
+        // with AdGuard's public DNS servers instead of any
+        // backend-pushed ones (it forces "Use Tailscale DNS" off;
+        // the two are mutually exclusive). Applies at TUN
+        // (re)establishment, so a toggle while connected takes
+        // effect on the next reconnect.
+        adguardSwitch = Switch(this).apply {
+            text = "AdGuard DNS"
+            setPadding(0, 32, 0, 0)
+            setOnCheckedChangeListener { _, checked ->
+                if (!syncingAdguardSwitch) backend.setAdguardDns(checked)
+            }
+        }
+        root.addView(adguardSwitch)
+        root.addView(TextView(this).apply {
+            text = "On: this VPN uses AdGuard DNS (ads/trackers " +
+                "filtered). Applies when the tunnel (re)connects. " +
+                "With it on, set Android Private DNS to Automatic."
+            textSize = 13f
+        })
         setContentView(root)
 
         backend.addListener(this)
@@ -121,6 +156,7 @@ class MainActivity : Activity(), TunnelStatusListener {
     override fun onTunnelStatus(status: TunnelStatus) {
         runOnUiThread {
             statusView.text = buildString {
+                append("Version: ").append(appVersionName).append('\n')
                 append("Backend: ").append(status.backendName).append('\n')
                 append("State: ").append(status.state.name).append('\n')
                 if (status.selfAddresses.isNotEmpty()) {
@@ -135,6 +171,9 @@ class MainActivity : Activity(), TunnelStatusListener {
                 dnsSwitch.isEnabled = true
                 syncingDnsSwitch = false
             }
+            syncingAdguardSwitch = true
+            adguardSwitch.isChecked = status.adguardDns
+            syncingAdguardSwitch = false
         }
     }
 
