@@ -16,6 +16,17 @@ Moriya on 2026-11-14: a standalone Android VPN app embedding
 libtailscale, first installed and evaluated on moto (moto g05,
 Android 15).
 
+Version notes: v0.1.1 (2026-11-14) fixed auth-key enrolment by
+mirroring upstream's login chain and enrolled moto as node moto-g05.
+v0.1.2 added the "Use Tailscale DNS" (CorpDNS) toggle that fixes
+Android Private DNS breakage, plus status-display fixes. v0.1.3 added
+the host-side AdGuard DNS mode and the in-app version display.
+**v1.0.0 (2026-11-15)** adds the extension architecture (§9) with the
+Health and Startup management extensions — the helper that was this
+app's founding purpose — and the state-divergence fix (§9.4). The
+major bump is deliberate: the app is no longer only a VPN client, it
+is a host for node-stack features.
+
 - Package: `dev.moriya.vpn`
 - App name: Moka VPN
 - Fixed APK file name at handover: `mokavpn.apk`
@@ -447,3 +458,107 @@ transfer for the ~25 MB class on 2026-11-14.
   AAR is built from unmodified upstream source in CI. Any future
   redistribution beyond Moriya's devices should re-check the licence
   and Tailscale's trademark terms.
+
+## 9. Extensions (v1.0.0)
+
+Moriya's founding purpose for this app (stated 2026-11-15): the
+stock Tailscale app cannot carry logic of our own, while this app —
+designated as the always-on VPN, so the system revives it when
+killed — can host a simple helper next to the tunnel. v1.0.0
+generalises that helper into an **extension architecture**, so
+arbitrary small features (health watching, startup management, a
+proxy, …) can be added without touching the tunnel layers.
+
+### 9.1 Where extensions live
+
+Extensions are app-side code in package `dev.moriya.vpn.extensions`
+(Layers 1–2 territory). They consume the backend only as Layer 2
+`TunnelStatus` — never a Layer 3 type — so the §2 layering rule is
+unchanged and the same grep check covers the new package. No new
+dependencies: framework APIs only (`HttpURLConnection` for the
+health poll).
+
+### 9.2 The contract (`VpnExtension`)
+
+Each extension has:
+
+- a stable `id` and a display name/description (`ExtensionInfo`);
+  the id keys the persisted enabled flag and is never renamed;
+- `start(context)` / `stop()` lifecycle, driven by the host;
+- `onTunnelStatus(status)` — every backend status change, delivered
+  only while started;
+- `statusText()` — a one-line status for the UI, safe to call in any
+  state.
+
+Enabled flags persist in the plain `mokavpn-settings`
+SharedPreferences file (the same file as the host-side AdGuard flag;
+settings, not secrets) under `extension-enabled-<id>`, via
+`ExtensionSettings`. The UI can toggle a flag while the VPN service
+is stopped; the host applies it at its next start.
+
+### 9.3 The host (`ExtensionManager`)
+
+`MokaVpnService` owns the manager: created in `onCreate`, started
+with the service, stopped in `onDestroy` — extensions live exactly
+as long as the VPN service, in the process Android revives for the
+always-on VPN. The manager instantiates the built-in extensions
+(`Extensions.createAll`), starts those whose flag is on, forwards
+backend status to the running set, and is the UI's read/write point
+while the service is alive (the service publishes it through a
+companion reference; `MainActivity` renders an "Extensions" section
+with a switch and a status line per extension).
+
+The built-ins are wired around one shared `HealthResults` channel
+owned by the manager: the Health extension publishes poll results
+into it, Startup management consumes them. Extensions never
+reference each other directly, so either side can change alone.
+
+### 9.4 The two built-in extensions
+
+- **Health** (`health`, default on — pure observation). Polls
+  `http://127.0.0.1:4096/global/health` (opencode serve on the same
+  device) every 60 s with a 5 s timeout; success is HTTP 200.
+  Loopback is never routed into the TUN, so the poll measures the
+  local stack, not the tunnel. Records last check time/result and
+  the consecutive-failure count into `HealthResults`. Cleartext for
+  loopback only is permitted by `res/xml/network_security_config.xml`.
+- **Startup management** (`startup-management`, default off — it
+  acts on another app, so it is opt-in). The helper. When the
+  Health channel reports 2 consecutive failures it issues the
+  resurrection call, re-issuing at every further 2 consecutive
+  failures (attempts at 2, 4, 6, …); it also issues the call once
+  when the tunnel first reaches Running while enabled. The call
+  mirrors the phone-node helper/waker exactly: an explicit-component
+  `startForegroundService` intent for
+  `dev.moriya.phonenode/.NodeService`. A resurrection is counted
+  **only** when the returned `ComponentName` is non-null — the
+  Libero lesson (2026-11-14): without a `<queries>` declaration the
+  call silently resolves null on Android 11+, so the manifest
+  declares `<queries><package android:name="dev.moriya.phonenode"/>`
+  and a null return is shown in the status line instead of being
+  swallowed. Platform exceptions (Android 12+ background FGS-start
+  restrictions) are likewise recorded, never thrown into the host.
+
+The cascade this completes: system revives the always-on VPN app →
+startup management notices the dead stack → phone-node restarts →
+its guest supervisor restarts opencode serve.
+
+### 9.5 State-divergence fix (also v1.0.0)
+
+Found on device 2026-11-15: the app could show `State: Running`
+(the backend session) while Android Settings showed no VPN — the OS
+tunnel had been torn down and the host did not follow. Three fixes:
+
+- `MokaVpnService.onRevoke()` and `onDestroy()` stop the backend
+  session (`disconnect()`), so an orderly system-side teardown ends
+  the session too. A process kill skips `onDestroy`, so the
+  restart-after-kill reconnect path is unaffected.
+- The UI shows the OS tunnel state as its own line (`Tunnel:
+  up/down`), fed by the process-wide `VpnTunnelState` holder from
+  the backend's TUN up/down callbacks — displayed separately from,
+  never derived from, the backend session state.
+- The auth-key field is masked by construction: `TunnelStatus`
+  gained `hasSavedAuthKey` (Layer 3 reports only the fact, never the
+  key); when a key is saved the field's hint says so, the field is
+  cleared after a start, and an empty field on Connect means "use
+  the saved key".

@@ -165,6 +165,9 @@ class LibtailscaleBackend : TunnelBackend {
         if (adguardDns) {
             status = status.copy(adguardDns = true)
         }
+        if (storedAuthKey() != null) {
+            status = status.copy(hasSavedAuthKey = true)
+        }
         val appContext = LibtailscaleAppContext(
             data = svc.appContextData,
             platformDnsConfig = { platformDnsConfig },
@@ -204,6 +207,9 @@ class LibtailscaleBackend : TunnelBackend {
                     // Persist for unattended re-enrolment after a
                     // process restart; never logged.
                     svc.encryptedPrefs.encrypt(AUTH_KEY_PREF, config.authKey)
+                    if (!status.hasSavedAuthKey) {
+                        updateStatus(status.copy(hasSavedAuthKey = true))
+                    }
                 }
                 runLoginChain(application, config, authKey)
             } catch (e: Exception) {
@@ -258,6 +264,9 @@ class LibtailscaleBackend : TunnelBackend {
                 updateStatus(status.copy(lastError = e.message))
             }
             services?.encryptedPrefs?.encrypt(AUTH_KEY_PREF, "")
+            if (status.hasSavedAuthKey) {
+                updateStatus(status.copy(hasSavedAuthKey = false))
+            }
         }
     }
 

@@ -75,6 +75,13 @@ data class TunnelStatus(
      * a live TUN. Persisted by Layer 3 across process restarts.
      */
     val adguardDns: Boolean = false,
+    /**
+     * Whether an auth key is saved on the device (Layer 3's
+     * encrypted store) and will be reused by a start that supplies
+     * no key. Lets the UI mask its key field: the stored key itself
+     * is never surfaced to Layer 1, only this fact (v1.0.0).
+     */
+    val hasSavedAuthKey: Boolean = false,
 )
 
 interface TunnelStatusListener {

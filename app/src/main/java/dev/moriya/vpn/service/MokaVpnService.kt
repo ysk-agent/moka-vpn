@@ -13,6 +13,8 @@ import android.system.OsConstants
 import dev.moriya.vpn.MainActivity
 import dev.moriya.vpn.MokaVpnApp
 import dev.moriya.vpn.R
+import dev.moriya.vpn.extensions.ExtensionManager
+import dev.moriya.vpn.extensions.ExtensionSettings
 import dev.moriya.vpn.tunnel.TunBuilder
 import dev.moriya.vpn.tunnel.TunHost
 import dev.moriya.vpn.tunnel.TunSession
@@ -45,9 +47,18 @@ class MokaVpnService : VpnService(), TunHost {
 
     private lateinit var networkTracker: DefaultNetworkTracker
 
+    private lateinit var extensionManager: ExtensionManager
+
     override fun onCreate() {
         super.onCreate()
         createNotificationChannel()
+        // Extension host (v1.0.0, DESIGN.md §9): extensions live and
+        // die with this service — the process Android revives for
+        // the always-on VPN — and are published for the UI through
+        // the companion reference below.
+        extensionManager = ExtensionManager(this, backend, ExtensionSettings(this))
+        extensions = extensionManager
+        extensionManager.start()
         // Default-network tracking (reduced NetworkChangeCallback,
         // DESIGN.md §3.7): the snapshot drives this service's
         // underlying networks and is forwarded to the backend as
@@ -108,14 +119,27 @@ class MokaVpnService : VpnService(), TunHost {
         }
 
     override fun onRevoke() {
-        // VPN permission moved to another app.
+        // VPN permission moved to another app. Stop the backend
+        // session too (state-divergence fix, v1.0.0): the app's
+        // reported state must follow a system-side teardown instead
+        // of sitting in Running with no TUN behind it.
         backend.disconnect()
         close()
         super.onRevoke()
     }
 
     override fun onDestroy() {
+        if (::extensionManager.isInitialized) {
+            extensionManager.stop()
+            if (extensions === extensionManager) extensions = null
+        }
         if (::networkTracker.isInitialized) networkTracker.stop()
+        // Same divergence fix as onRevoke: an orderly service
+        // teardown ends the backend session, so the UI's state line
+        // never claims Running for a tunnel the system has taken
+        // down. (A process kill skips onDestroy entirely, so the
+        // restart-after-kill reconnect path is unaffected.)
+        backend.disconnect()
         close()
         onVpnStatusChanged(false)
         super.onDestroy()
@@ -165,15 +189,18 @@ class MokaVpnService : VpnService(), TunHost {
     }
 
     override fun onVpnStatusChanged(active: Boolean) {
-        // TODO(ui-state): forward to a process-wide status holder the
-        // MainActivity observes (the TunnelBackend listener already
-        // carries full status; this hook exists for the service-local
-        // notification state).
+        // The backend's account of the OS TUN (established / torn
+        // down), published to the process-wide holder the UI reads
+        // for its separate "Tunnel:" line (state-divergence fix,
+        // v1.0.0). Deliberately NOT merged into the backend session
+        // state: the two can legitimately differ.
+        VpnTunnelState.set(active)
     }
 
     fun close() {
         if (closed) return
         closed = true
+        VpnTunnelState.set(false)
         backend.onVpnServiceDisconnected(hostId)
         stopSelf()
     }
@@ -238,5 +265,15 @@ class MokaVpnService : VpnService(), TunHost {
         const val ACTION_STOP_VPN = "dev.moriya.vpn.STOP_VPN"
         private const val CHANNEL_ID = "moka-vpn-status"
         private const val STATUS_NOTIFICATION_ID = 1
+
+        /**
+         * The live extension host, published by onCreate and cleared
+         * by onDestroy so MainActivity (same process) can render and
+         * toggle extensions. Null while the VPN service is stopped;
+         * the UI then falls back to the persisted flags alone.
+         */
+        @Volatile
+        var extensions: ExtensionManager? = null
+            private set
     }
 }
