@@ -12,6 +12,17 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SYSTEM_EXEMPTED" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <!-- Declaration only, for the ADB keepalive extension (§9.7):
+         it restores the wireless-debugging toggle (Settings.Global
+         adb_wifi_enabled) when the toggle drops. The system never
+         grants this permission automatically; it is granted once by
+         hand over adb (`pm grant dev.moriya.vpn
+         android.permission.WRITE_SECURE_SETTINGS`) after install.
+         Without the declaration the grant cannot be given at all —
+         measured against v1.1.0 on 2026-11-16, when the pm grant
+         attempt failed for exactly this reason. Without the grant
+         the extension only observes and reports. -->
+    <uses-permission android:name="android.permission.WRITE_SECURE_SETTINGS" />
 
     <!-- Package visibility (Android 11+): the Startup management
          extension starts phone-node's NodeService with an explicit

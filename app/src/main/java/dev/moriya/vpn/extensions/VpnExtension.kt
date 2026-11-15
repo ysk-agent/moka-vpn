@@ -88,7 +88,21 @@ object Extensions {
             "through this phone's network.",
     )
 
-    val ALL: List<ExtensionInfo> = listOf(HEALTH, STARTUP_MANAGEMENT, PROXY)
+    val ADB_KEEPALIVE = ExtensionInfo(
+        id = "adb-keepalive",
+        displayName = "ADB keepalive",
+        // Writes a system setting, so it is opt-in like startup
+        // management.
+        defaultEnabled = false,
+        description = "Keeps wireless debugging on: if it turns " +
+            "itself off while Wi-Fi is connected, turns it back on " +
+            "so adb on port 5555 keeps answering. Needs a one-time " +
+            "grant: adb shell pm grant dev.moriya.vpn " +
+            "android.permission.WRITE_SECURE_SETTINGS",
+    )
+
+    val ALL: List<ExtensionInfo> =
+        listOf(HEALTH, STARTUP_MANAGEMENT, PROXY, ADB_KEEPALIVE)
 
     /**
      * Build the extension instances. [healthResults] is the shared
@@ -96,9 +110,11 @@ object Extensions {
      * Startup management consumes from it (wired by the host, per
      * the v1.0.0 design). [underlyingNetwork] supplies the host's
      * current non-VPN network (Layer 1's DefaultNetworkTracker pick,
-     * passed through by the manager) for extensions whose sockets
-     * must egress on the physical network — the Proxy's outbound
-     * connections; it is a Layer 1 facility, not a backend type.
+     * passed through by the manager) for extensions that care about
+     * the physical network — the Proxy binds its outbound sockets
+     * to it, and ADB keepalive reads its transports to tell Wi-Fi
+     * from mobile data; it is a Layer 1 facility, not a backend
+     * type.
      */
     fun createAll(
         healthResults: HealthResults,
@@ -107,5 +123,6 @@ object Extensions {
         HealthExtension(HEALTH, healthResults),
         StartupManagementExtension(STARTUP_MANAGEMENT, healthResults),
         ProxyExtension(PROXY, underlyingNetwork),
+        AdbKeepaliveExtension(ADB_KEEPALIVE, underlyingNetwork),
     )
 }

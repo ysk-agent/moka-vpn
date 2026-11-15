@@ -26,7 +26,9 @@ Health and Startup management extensions — the helper that was this
 app's founding purpose — and the state-divergence fix (§9.5).
 **v1.1.0 (2026-11-15)** adds the Proxy extension (§9.6), the third
 built-in extension, and current-status delivery when an extension is
-started. The
+started. **v1.2.0 (2026-11-16)** adds the ADB keepalive extension
+(§9.7), the fourth built-in, which guards the wireless-debugging
+toggle the node phones' adb access depends on. The
 major bump is deliberate: the app is no longer only a VPN client, it
 is a host for node-stack features.
 
@@ -548,6 +550,8 @@ its guest supervisor restarts opencode serve.
 
 - **Proxy** (`proxy`, default off — it opens a listening socket),
   added in v1.1.0: see §9.6.
+- **ADB keepalive** (`adb-keepalive`, default off — it writes a
+  system setting), added in v1.2.0: see §9.7.
 
 ### 9.5 State-divergence fix (also v1.0.0)
 
@@ -639,3 +643,82 @@ rejected. Target URLs are never logged.
   change, so its listener appears if phone-node's proxy later
   stops. In practice a node runs one proxy or the other; this one
   is the survivor when the node stack is down.
+
+### 9.7 ADB keepalive extension (v1.2.0)
+
+The fourth built-in extension (`adb-keepalive`, default off — it
+writes a system setting, so it is opt-in like startup management).
+It guards the node phones' adb access, which the survival cascade
+does not cover: adb is how a wedged node is inspected and repaired
+from the VM, and it has a failure mode of its own.
+
+Background, measured on moto g05 (Android 15) on 2026-11-16. Wired
+USB debugging is dead on that device while Android runs, so adb
+goes over the network: wireless debugging is paired once, then
+`adb tcpip 5555` fixes adbd's listener to port 5555 on all
+interfaces, reachable at the node's tailnet address. Two measured
+properties make that setup almost self-healing: the 5555 listener
+configuration (`service.adb.tcp.port`) survives adbd restarts, and
+the listener revives on its own once adbd runs again. But adbd
+runs only while at least one debug toggle is on — and wireless
+debugging sometimes turns itself off (it did so repeatedly on the
+Libero), at which point adbd stops and there is no remote way back
+in: the very tool needed for repair is what died. The steady state
+Moriya chose is wireless ON / USB OFF, because many apps refuse to
+start while USB debugging (`adb_enabled`) is on; the wireless
+toggle carries no such problem.
+
+- **What it watches.** Every 60 s (the Health extension's cadence)
+  it reads Settings.Global `adb_wifi_enabled`. That is the only
+  setting it ever reads or writes: **`adb_enabled` is never
+  touched, under any circumstance** — writing it would
+  reintroduce the app-refusal problem the wireless-only setup
+  exists to avoid.
+- **The decision** lives in `AdbKeepaliveLogic` as a pure function
+  of (toggle value, grant held, Wi-Fi connected), covered by
+  plain-JVM tests in `tests/adb-keepalive/`; the extension class
+  is the Android-facing shell. A write happens only in the one
+  state where it is needed and known to stick — toggle off, grant
+  held, Wi-Fi connected — and restores are counted with the last
+  restore time for the status line. Toggle on: nothing. Toggle
+  unreadable (never written on the device, or a provider error):
+  nothing — an unknown state is never written.
+- **The Wi-Fi gate.** When Wi-Fi is down the system drops the
+  toggle and will not keep a restored value, so writing would be a
+  fight the extension cannot win; it waits instead. The check must
+  describe the physical network, not the tunnel — this app is
+  itself the VPN, so the system's default network may be our own
+  TUN. It therefore reuses the host's underlying-network pick
+  (the `DefaultNetworkTracker` selection, NOT_VPN by construction,
+  passed through `ExtensionManager` as the same
+  `() -> Network?` provider the Proxy's egress binds to) and reads
+  that network's transports: Wi-Fi means `TRANSPORT_WIFI` on the
+  underlying network; on mobile data the pick is cellular and the
+  gate stays closed.
+- **The grant model.** Writing Settings.Global needs
+  `WRITE_SECURE_SETTINGS`. The manifest declares it, but the
+  system never grants it automatically; it is granted once by hand
+  after install: `adb shell pm grant dev.moriya.vpn
+  android.permission.WRITE_SECURE_SETTINGS` (run from the VM over
+  the tailnet adb connection, coordinated with Moriya — the grant
+  is deliberately not something the app can do for itself). The
+  declaration is the load-bearing half: against v1.1.0, which did
+  not declare it, the same `pm grant` failed outright (measured
+  2026-11-16). Grant state is checked with `checkSelfPermission`
+  before any write is considered; without the grant the decision
+  is NO_GRANT and no write is attempted. The status line always
+  shows the toggle value, grant held or NOT held, Wi-Fi state,
+  restore count and last restore time, and while the grant is
+  missing it also shows the grant command itself, so the fix is
+  discoverable from the UI. A write that still throws
+  `SecurityException` (grant revoked between check and write) is
+  recorded in the status line, never thrown into the host.
+- **Limitation, stated plainly.** This extension guards the
+  toggle, not the listener configuration. After a device reboot,
+  the `adb tcpip 5555` configuration itself is gone
+  (`service.adb.tcp.port` does not survive a reboot), so the
+  extension alone cannot restore 5555: one wireless-debugging
+  connect plus an `adb tcpip 5555` re-run is needed first. It also
+  cannot restore anything while Wi-Fi is down, and like every
+  extension it only runs while the host service lives — the
+  always-on designation is its anchor, as for the rest of §9.
