@@ -212,19 +212,29 @@ class ProxyExtension(
         private const val RETRY_INTERVAL_SECONDS = 15L
 
         /**
-         * Source addresses allowed to use the proxy — Moriya's own
-         * devices at their CURRENT tailnet addresses (2026-11-15),
-         * plus loopback for on-device clients. Deliberately NOT
-         * copied from phone-node's list, which still carries the
-         * retired VM address ***REMOVED*** (the VM rejoined as
-         * muse-2 on 2026-11-13); that staleness is not propagated.
+         * Source addresses allowed to use the proxy (and, via this
+         * same set, the ADB control endpoint) — Moriya's own devices
+         * (muse-2, muse-1, m1, moto, moto-g05) plus loopback for
+         * on-device clients.
+         *
+         * Privacy rule (Moriya, 2026-11-16): no tailnet address of a
+         * real device may appear in this public source tree, not
+         * even as a comment. The device addresses are therefore
+         * injected at CI build time from the ALLOWED_SOURCES GitHub
+         * secret (comma-separated IPv4), converted by the Gradle
+         * build to 32-bit integers, and generated as
+         * [GeneratedAllowlist] — so neither the repository nor a
+         * plain strings dump of the APK contains a dotted-quad
+         * literal for a real device. They are decoded back to text
+         * only in memory at runtime. Builds without the secret
+         * (local / emulator) get loopback only.
          */
-        val ALLOWED_SOURCES: Set<String> = setOf(
-            "***REMOVED***", // Muse VM (muse-2)
-            "***REMOVED***", // Mac (m1)
-            "***REMOVED***", // Android phone (moto, stock-app node)
-            "127.0.0.1", // loopback
-            "::1", // loopback (IPv6)
-        )
+        val ALLOWED_SOURCES: Set<String> = buildSet {
+            add("127.0.0.1") // loopback
+            add("::1") // loopback (IPv6)
+            GeneratedAllowlist.IPV4_INTEGERS.forEach { value ->
+                add(ProxyProtocol.ipv4String(value))
+            }
+        }
     }
 }

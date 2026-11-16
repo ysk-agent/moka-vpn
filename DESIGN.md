@@ -35,7 +35,11 @@ node's tailnet address through which the VM can turn USB
 debugging on and off — the recovery path for mobile data, where
 wireless debugging cannot keep adbd alive. The
 major bump is deliberate: the app is no longer only a VPN client, it
-is a host for node-stack features.
+is a host for node-stack features. **v1.4.0 (2026-11-16)** changes
+no behaviour: it removes the proxy / ADB-control allowlist from
+the source tree — the device addresses are injected at CI build
+time from a GitHub secret and carried in the binary as integers
+only (§9.6, Allowlist).
 
 - Package: `dev.moriya.vpn`
 - App name: Moka VPN
@@ -615,13 +619,24 @@ rejected. Target URLs are never logged.
   on while the tunnel is already up works, `ExtensionManager` now
   delivers the backend's current status to an extension once,
   right after starting it (also v1.1.0).
-- **Allowlist.** Only Moriya's own devices at their current
-  tailnet addresses (Muse VM `muse-2` ***REMOVED***, Mac `m1`
-  ***REMOVED***, the stock-app `moto` node ***REMOVED***) plus
-  loopback; anything else gets 403 and is closed. The list is a
-  code constant. It is deliberately NOT copied from phone-node's
-  allowlist, which still carries the retired VM address
-  ***REMOVED*** — that staleness ends here.
+- **Allowlist.** Only Moriya's own devices — the Muse VMs
+  `muse-2` and `muse-1`, Mac `m1`, and the phones `moto` and
+  `moto-g05` — plus loopback; anything else gets 403 and is
+  closed. Since v1.4.0 the list is NOT a code constant and no
+  real device address appears anywhere in this repository, in
+  text or in the binary: Moriya's rule (2026-11-16) is that
+  tailnet addresses stay out of public code even though the
+  tailnet is not reachable from outside. CI passes the addresses
+  in the `ALLOWED_SOURCES` GitHub secret (comma-separated IPv4,
+  given to the APK build step only, never echoed); the Gradle
+  build converts each address to its 32-bit integer form and
+  generates `GeneratedAllowlist` holding only those integers, and
+  the app decodes them back to address text in memory at runtime.
+  A plain strings dump of the APK therefore shows no dotted-quad
+  literal for a real device. Builds without the secret (local,
+  emulator) generate an empty list and allow loopback only.
+  Changing the list is a secret update plus a rebuild — still a
+  release, but no source change and no address ever lands in git.
 - **Outbound egress — the load-bearing decision.** The proxy runs
   in the VPN app's own process, so an unbound outbound socket
   would follow whatever routing the system applies to our own UID
@@ -772,12 +787,16 @@ toggle carries no such problem.
 - **VM-side helper.** `tools/moka-adb-debug on|off|status` reads
   the token from `~/.config/moka-vpn/adb-debug-token` (mode 600;
   the script fails with instructions when the file is missing
-  and never invents a value) and calls
-  `http://***REMOVED***:8091/...` through the tunnel proxy,
-  derived from `HTTPS_PROXY` exactly as the adb relay derives it
-  (`"${HTTPS_PROXY%:*}:3130"`). The node address is the current
-  trial node's; the endpoint itself binds whatever tailnet IPv4
-  the backend reports.
+  and never invents a value) and calls the node's control port
+  (8091) through the tunnel proxy, derived from `HTTPS_PROXY`
+  exactly as the adb relay derives it
+  (`"${HTTPS_PROXY%:*}:3130"`). The node address itself is not
+  written in the script or anywhere in this repository: it comes
+  from the `MOKA_ADB_DEBUG_HOST` environment variable or from
+  `~/.config/moka-vpn/adb-debug-host` next to the token file, and
+  the script fails with instructions when neither is set. The
+  endpoint itself binds whatever tailnet IPv4 the backend
+  reports.
 - **Limitation, stated plainly.** This extension guards the
   toggle, not the listener configuration. After a device reboot,
   the `adb tcpip 5555` configuration itself is gone

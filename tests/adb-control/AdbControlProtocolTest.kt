@@ -23,11 +23,15 @@ private fun checkEq(name: String, expected: Any?, actual: Any?) {
     }
 }
 
+// Dummy addresses only (TEST-NET 192.0.2.0/24): this fixture
+// mirrors the SHAPE of the production allowlist (a handful of
+// device addresses plus loopback) without naming any real device —
+// real addresses never appear in this repository (see DESIGN.md).
 private val ALLOWLIST = setOf(
-    "***REMOVED***", "***REMOVED***", "***REMOVED***", "127.0.0.1", "::1",
+    "192.0.2.10", "192.0.2.11", "192.0.2.12", "127.0.0.1", "::1",
 )
 private const val TOKEN = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-private const val VM = "***REMOVED***"
+private const val VM = "192.0.2.10"
 
 private fun auth(
     source: String? = VM,
@@ -134,7 +138,7 @@ fun main() {
         "header found, value trimmed",
         TOKEN,
         AdbControlProtocol.tokenHeaderValue(
-            listOf("Host: ***REMOVED***:8091", "X-Moka-Token:  $TOKEN ", "Accept: */*"),
+            listOf("Host: 192.0.2.20:8091", "X-Moka-Token:  $TOKEN ", "Accept: */*"),
         ),
     )
     checkEq(
@@ -145,7 +149,7 @@ fun main() {
     checkEq(
         "header absent",
         null,
-        AdbControlProtocol.tokenHeaderValue(listOf("Host: ***REMOVED***:8091")),
+        AdbControlProtocol.tokenHeaderValue(listOf("Host: 192.0.2.20:8091")),
     )
     checkEq(
         "header empty value counts as absent",

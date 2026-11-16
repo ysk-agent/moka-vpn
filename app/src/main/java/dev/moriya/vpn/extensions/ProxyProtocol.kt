@@ -114,6 +114,18 @@ object ProxyProtocol {
         sourceAddress != null && sourceAddress in allowed
 
     /**
+     * Render a 32-bit IPv4 value (as carried by the CI-generated
+     * allowlist, see ProxyExtension) back to dotted-quad text. The
+     * allowlist travels as integers so that no device address ever
+     * appears as a dotted-quad literal in source or in the binary;
+     * it is materialised as text only in memory, at runtime.
+     */
+    fun ipv4String(value: Long): String =
+        intArrayOf(24, 16, 8, 0).joinToString(".") { shift ->
+            ((value shr shift) and 0xFF).toString()
+        }
+
+    /**
      * Header lines to forward upstream: the client's lines minus
      * the proxy-specific ones (`Proxy-Connection`,
      * `Proxy-Authorization`), which must not leak to the origin —

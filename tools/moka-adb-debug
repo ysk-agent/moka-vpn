@@ -22,7 +22,28 @@
 set -euo pipefail
 
 TOKEN_FILE="$HOME/.config/moka-vpn/adb-debug-token"
-NODE_HOST="***REMOVED***" # moto-g05, the current trial node
+HOST_FILE="$HOME/.config/moka-vpn/adb-debug-host"
+# The node's tailnet address is NOT written in this script (or
+# anywhere in this public repository). It comes from the
+# MOKA_ADB_DEBUG_HOST environment variable, or from the host file
+# next to the token file:
+#   ~/.config/moka-vpn/adb-debug-host   (mode 600, address only)
+NODE_HOST="${MOKA_ADB_DEBUG_HOST:-}"
+if [ -z "$NODE_HOST" ] && [ -f "$HOST_FILE" ]; then
+    NODE_HOST="$(tr -d '[:space:]' < "$HOST_FILE")"
+fi
+if [ -z "$NODE_HOST" ]; then
+    cat >&2 <<EOF
+moka-adb-debug: no node address configured
+
+Set the target node's tailnet address (kept out of the public
+repository on purpose) in one of:
+
+  MOKA_ADB_DEBUG_HOST=<address> moka-adb-debug ...
+  printf %s '<address>' > $HOST_FILE && chmod 600 $HOST_FILE
+EOF
+    exit 1
+fi
 NODE_PORT="8091"
 
 usage() {

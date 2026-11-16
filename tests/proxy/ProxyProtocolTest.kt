@@ -122,15 +122,23 @@ fun main() {
     )
 
     // -- isAllowedSource --
-    val allowed = setOf("***REMOVED***", "127.0.0.1")
-    check("allowlist member", ProxyProtocol.isAllowedSource("***REMOVED***", allowed))
+    // Dummy addresses only (TEST-NET 192.0.2.0/24): real device
+    // addresses never appear in this repository (see DESIGN.md).
+    val allowed = setOf("192.0.2.10", "127.0.0.1")
+    check("allowlist member", ProxyProtocol.isAllowedSource("192.0.2.10", allowed))
     check("allowlist loopback", ProxyProtocol.isAllowedSource("127.0.0.1", allowed))
     check("allowlist stranger", !ProxyProtocol.isAllowedSource("100.64.0.1", allowed))
     check("allowlist null source", !ProxyProtocol.isAllowedSource(null, allowed))
     check(
-        "allowlist retired VM address is NOT allowed",
-        !ProxyProtocol.isAllowedSource("***REMOVED***", allowed),
+        "allowlist non-member address is NOT allowed",
+        !ProxyProtocol.isAllowedSource("192.0.2.99", allowed),
     )
+
+    // -- ipv4String (the generated allowlist's integer decoding) --
+    checkEq("ipv4 integer decodes", "192.0.2.1", ProxyProtocol.ipv4String(3221225985L))
+    checkEq("ipv4 integer zero", "0.0.0.0", ProxyProtocol.ipv4String(0L))
+    checkEq("ipv4 integer max", "255.255.255.255", ProxyProtocol.ipv4String(4294967295L))
+    checkEq("ipv4 integer high bit", "203.0.113.7", ProxyProtocol.ipv4String(3405803783L))
 
     // -- forwardableHeaders --
     checkEq(

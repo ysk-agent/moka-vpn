@@ -13,6 +13,9 @@ name: build
 #   SIGNING_KEY_ALIAS
 # Register them with `printf %s "$VALUE" | gh secret set NAME` —
 # an `echo |` pipe stores a trailing newline and breaks signing.
+# The ALLOWED_SOURCES secret (allowlist addresses, comma-separated
+# IPv4) follows the same registration rule and is passed only to
+# the APK build step below.
 
 on:
   push:
@@ -197,6 +200,13 @@ jobs:
           SIGNING_STORE_PASS: ${{ secrets.SIGNING_STORE_PASS }}
           SIGNING_KEY_PASS: ${{ secrets.SIGNING_KEY_PASS }}
           SIGNING_KEY_ALIAS: ${{ secrets.SIGNING_KEY_ALIAS }}
+          # Proxy / ADB-control allowlist (device tailnet addresses,
+          # comma-separated IPv4). Passed to THIS step only: the
+          # Gradle build converts it to integers and generates code
+          # from it (app/build.gradle.kts), so the addresses never
+          # appear in the repository or as text in the APK. Never
+          # echo this variable.
+          ALLOWED_SOURCES: ${{ secrets.ALLOWED_SOURCES }}
         run: ./gradlew assembleDebug --stacktrace
 
       - name: Name, hash and fingerprint the APK
