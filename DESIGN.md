@@ -39,7 +39,13 @@ is a host for node-stack features. **v1.4.0 (2026-11-16)** changes
 no behaviour: it removes the proxy / ADB-control allowlist from
 the source tree — the device addresses are injected at CI build
 time from a GitHub secret and carried in the binary as integers
-only (§9.6, Allowlist).
+only (§9.6, Allowlist). **v1.5.0 (2026-11-25)** adds the Speed
+meter extension (§9.8) — the status-bar network speed meter
+Moriya specified in the main chat — and a set of status/UI
+additions (§9.9): the debug-toggle states in the top status
+block, a USB-debugging switch in the ADB keepalive card, and a
+card-based reorganisation of the one screen with selectable
+status texts.
 
 - Package: `dev.moriya.vpn`
 - App name: Moka VPN
@@ -562,6 +568,8 @@ its guest supervisor restarts opencode serve.
 - **ADB keepalive** (`adb-keepalive`, default off — it writes a
   system setting), added in v1.2.0: see §9.7. v1.3.0 extends it
   with the remote debug control endpoint (§9.7).
+- **Speed meter** (`speed-meter`, default off — it draws a
+  persistent status-bar icon), added in v1.5.0: see §9.8.
 
 ### 9.5 State-divergence fix (also v1.0.0)
 
@@ -798,11 +806,16 @@ toggle carries no such problem.
   endpoint itself binds whatever tailnet IPv4 the backend
   reports.
 - **Limitation, stated plainly.** This extension guards the
-  toggle, not the listener configuration. After a device reboot,
-  the `adb tcpip 5555` configuration itself is gone
-  (`service.adb.tcp.port` does not survive a reboot), so the
-  extension alone cannot restore 5555: one wireless-debugging
-  connect plus an `adb tcpip 5555` re-run is needed first. The
+  toggle, not the listener configuration. A device reboot was
+  long assumed to clear the `adb tcpip 5555` configuration
+  itself; that was corrected by measurement on 2026-11-22 — on
+  moto g05 the setting survived a reboot (`service.adb.tcp.port`
+  still read 5555 after a boot that morning; `persist.adb.tcp.port`
+  is empty, so the mechanism is unconfirmed, and another device
+  or build may behave differently). Where a reboot does clear
+  it, the extension alone cannot restore 5555: one
+  wireless-debugging connect plus an `adb tcpip 5555` re-run is
+  needed first. The
   control endpoint has the same boundary: after a reboot it can
   still turn `adb_enabled` on, but with the tcpip configuration
   gone there is no 5555 listener for the VM to reach, so VM
@@ -812,3 +825,101 @@ toggle carries no such problem.
   anything while Wi-Fi is down, and like every extension both
   halves only run while the host service lives — the always-on
   designation is its anchor, as for the rest of §9.
+
+### 9.8 Speed meter extension (v1.5.0)
+
+The fifth built-in extension (`speed-meter`, default off — it
+draws a persistent status-bar icon, so it is opt-in). Moriya
+decided the meter in the main chat (2026-11-25): a separate
+speed-meter app would need its own resident process and
+foreground service, while this app already is the resident,
+system-revived process — so the meter rides here, like every
+other node helper (§9).
+
+- **Measurement.** `TrafficStats.getTotalRxBytes()` /
+  `getTotalTxBytes()` deltas — the whole device's traffic, not
+  the tunnel's interior. The rate divides by the actual elapsed
+  milliseconds between samples, not the nominal interval. The
+  math is pure (`SpeedMeterLogic`, including the baseline
+  `Sampler`) and covered by plain-JVM tests in
+  `tests/speed-meter/`; the extension class is the Android shell
+  (counter reads, screen receiver, notification). If the
+  counters come back `TrafficStats.UNSUPPORTED`, the status line
+  reports the meter unavailable and no icon is shown.
+- **Display format — fixed by decision.** Always "XX.X MB/s":
+  the combined up+down rate, decimal MB, exactly one decimal,
+  quantised to 0.1 MB/s steps; the unit never switches (300 KB/s
+  is "0.3 MB/s", idle is "0.0 MB/s"). The fixed width keeps the
+  icon's shape stable, and the quantisation means small
+  fluctuations do not change the string at all. No other unit
+  appears anywhere in the meter's display, including the
+  extension's status line (which shows the down/up split in the
+  same format).
+- **The icon.** A dedicated notification — its own channel
+  (`moka-vpn-speed-meter`, low importance) and id (2; the
+  foreground-service notification is id 1) — whose small icon is
+  a bitmap rendered from the speed string, the number over the
+  unit (the Internet Speed Meter pattern). `notify()` is called
+  **only when the display string changes**, so at a steady rate
+  the meter costs two counter reads per interval and nothing
+  else. Nothing is recorded or logged; there is no history.
+- **Interval.** A dropdown of presets — 1 / 2 / 3 / 5 / 10 s,
+  default 1 s — in the extension's UI card, persisted in the
+  plain settings prefs and read fresh on every tick, so a change
+  applies live with no restart. There is deliberately **no
+  adaptive interval** in this version: the fixed-cadence version
+  ships first, and interval tuning happens afterwards on a
+  separate throwaway lab APK (reinstalling this app per trial
+  would be far too heavy, and each install drops the tunnel);
+  the preset lineup may be revised once those trials land.
+- **Power.** While the screen is off, polling and icon updates
+  stop entirely (a receiver for `ACTION_SCREEN_OFF` /
+  `ACTION_SCREEN_ON`, registered only while the extension runs);
+  the notification stays, showing the last reading. On
+  screen-on the byte baseline is reset, so traffic that moved
+  while the screen was off does not spike the first reading.
+  Switching the extension off cancels the notification,
+  unregisters the receiver and removes every pending tick —
+  zero polling, zero draw.
+
+### 9.9 Status and UI additions (v1.5.0)
+
+Three smaller changes ride in the same version, all in
+`MainActivity` (Layer 1):
+
+- **Debug states in the top status block.** Alongside State and
+  Tunnel, the status block now shows `Wireless debug:` and
+  `USB debug:` — the live `adb_wifi_enabled` / `adb_enabled`
+  values, re-read from Settings.Global on every render. The
+  reason is the 2026-11-22 diagnosis (Moriya's standing rule):
+  when 5555 does not answer, the cause is usually a dropped
+  debug toggle — adbd stopped — not the tunnel; the two values
+  that decide it now sit at the top of the screen instead of
+  being buried in the ADB card's status line.
+- **USB-debugging switch.** The ADB keepalive card gains a
+  switch that reads and writes `adb_enabled` directly — the
+  owner's own in-app action under the same WRITE_SECURE_SETTINGS
+  grant, the in-person counterpart of the control endpoint's
+  on/off commands (§9.7). Its position always reflects the
+  actual setting (re-read on every UI refresh, so a change made
+  from the VM shows up), and a refused write reverts the row
+  rather than claiming a state the device is not in. The §9.7
+  separation invariant is unchanged and now reads: exactly three
+  `Settings.Global.putInt` sites exist for the adb keys — the
+  watcher (writes only `adb_wifi_enabled`), the control
+  endpoint's `setUsbDebugging()` (writes only `adb_enabled`,
+  after authorization), and this switch (writes only
+  `adb_enabled`, on an explicit tap). No automatic logic writes
+  `adb_enabled`.
+- **Cards and selectable text.** The flat list had grown hard to
+  scan, so the screen is reorganised into card-style sections
+  with one hierarchy — heading, then switch / status / note
+  rows: Status, Connection, DNS, and one card per extension
+  under an Extensions heading. Status texts (the top block and
+  every extension status line) are selectable
+  (`setTextIsSelectable(true)`): on 2026-11-16 the ADB control
+  token could not be copied off the screen and had to be handed
+  over as a screenshot for transcription — that papercut is
+  fixed. No control changed behaviour in the move: auth-key
+  field, both DNS switches, every extension switch and status
+  line, and the version display all work as before.

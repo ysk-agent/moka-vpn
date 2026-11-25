@@ -105,8 +105,20 @@ object Extensions {
             "android.permission.WRITE_SECURE_SETTINGS",
     )
 
+    val SPEED_METER = ExtensionInfo(
+        id = "speed-meter",
+        displayName = "Speed meter",
+        // Draws a persistent status-bar icon, so it is opt-in like
+        // startup management and the proxy.
+        defaultEnabled = false,
+        description = "Shows the device's current total network " +
+            "speed in the status bar, always in MB/s, refreshed on " +
+            "the interval below while the screen is on. Stops " +
+            "entirely while the screen is off or the switch is off.",
+    )
+
     val ALL: List<ExtensionInfo> =
-        listOf(HEALTH, STARTUP_MANAGEMENT, PROXY, ADB_KEEPALIVE)
+        listOf(HEALTH, STARTUP_MANAGEMENT, PROXY, ADB_KEEPALIVE, SPEED_METER)
 
     /**
      * Build the extension instances. [healthResults] is the shared
@@ -128,5 +140,6 @@ object Extensions {
         StartupManagementExtension(STARTUP_MANAGEMENT, healthResults),
         ProxyExtension(PROXY, underlyingNetwork),
         AdbKeepaliveExtension(ADB_KEEPALIVE, underlyingNetwork),
+        SpeedMeterExtension(SPEED_METER),
     )
 }
